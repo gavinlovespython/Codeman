@@ -1131,6 +1131,7 @@ class CodemanApp {
     if (overlay) {
       overlay.classList.add('visible');
       this.loadTunnelStatus();
+      this.loadHistorySessions();
     }
   }
 
@@ -1144,6 +1145,113 @@ class CodemanApp {
     if (qrWrap) {
       clearTimeout(this._welcomeQrShrinkTimer);
       qrWrap.classList.remove('expanded');
+    }
+  }
+
+  async loadHistorySessions() {
+    const container = document.getElementById('historySessions');
+    const list = document.getElementById('historyList');
+    if (!container || !list) return;
+
+    try {
+      const res = await fetch('/api/history/sessions');
+      const data = await res.json();
+      const sessions = data.sessions || [];
+      if (sessions.length === 0) {
+        container.style.display = 'none';
+        return;
+      }
+
+      // Deduplicate: keep only the most recent session per workingDir
+      const byDir = new Map();
+      for (const s of sessions) {
+        if (!byDir.has(s.workingDir)) byDir.set(s.workingDir, []);
+        byDir.get(s.workingDir).push(s);
+      }
+
+      // Flatten: show up to 2 most recent per dir, max 12 total
+      const items = [];
+      for (const [, group] of byDir) {
+        items.push(...group.slice(0, 2));
+      }
+      items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+      const display = items.slice(0, 12);
+
+      // Build DOM safely (no innerHTML with user data)
+      list.replaceChildren();
+      for (const s of display) {
+        const size = s.sizeBytes < 1024 ? `${s.sizeBytes}B`
+          : s.sizeBytes < 1048576 ? `${(s.sizeBytes / 1024).toFixed(0)}K`
+          : `${(s.sizeBytes / 1048576).toFixed(1)}M`;
+        const date = new Date(s.lastModified);
+        const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
+          + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const shortDir = s.workingDir.replace(/^\/home\/[^/]+\//, '~/');
+
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        item.title = s.workingDir;
+        item.addEventListener('click', () => this.resumeHistorySession(s.sessionId, s.workingDir));
+
+        const dirSpan = document.createElement('span');
+        dirSpan.className = 'history-item-dir';
+        dirSpan.textContent = shortDir;
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'history-item-meta';
+        metaSpan.textContent = timeStr;
+
+        const sizeSpan = document.createElement('span');
+        sizeSpan.className = 'history-item-size';
+        sizeSpan.textContent = size;
+
+        item.append(dirSpan, metaSpan, sizeSpan);
+        list.appendChild(item);
+      }
+
+      container.style.display = '';
+    } catch (err) {
+      console.error('[loadHistorySessions]', err);
+      container.style.display = 'none';
+    }
+  }
+
+  async resumeHistorySession(sessionId, workingDir) {
+    try {
+      this.terminal.clear();
+      this.terminal.writeln(`\x1b[1;32m Resuming conversation ${sessionId.slice(0, 8)}...\x1b[0m`);
+
+      // Generate a session name from the working dir
+      const dirName = workingDir.split('/').pop() || 'session';
+      let startNumber = 1;
+      for (const [, session] of this.sessions) {
+        const match = session.name && session.name.match(/^w(\d+)-/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num >= startNumber) startNumber = num + 1;
+        }
+      }
+      const name = `w${startNumber}-${dirName}`;
+
+      // Create session with resumeSessionId
+      const createRes = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir, name, resumeSessionId: sessionId })
+      });
+      const createData = await createRes.json();
+      if (!createData.success) throw new Error(createData.error);
+
+      const newSessionId = createData.session.id;
+
+      // Start interactive
+      await fetch(`/api/sessions/${newSessionId}/interactive`, { method: 'POST' });
+
+      this.terminal.writeln(`\x1b[90m Session ${name} ready\x1b[0m`);
+      await this.selectSession(newSessionId);
+      this.terminal.focus();
+    } catch (err) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
     }
   }
 
@@ -3642,9 +3750,12 @@ class CodemanApp {
     // Track working directory for path normalization in Project Insights
     this.currentSessionWorkingDir = session?.workingDir || null;
     if (session && session.pid === null && session.status === 'idle') {
-      // This is a restored session - attach to the existing screen
+      // This is a restored session - attach to the existing screen/shell
       try {
-        await fetch(`/api/sessions/${sessionId}/interactive`, { method: 'POST' });
+        const endpoint = session.mode === 'shell'
+          ? `/api/sessions/${sessionId}/shell`
+          : `/api/sessions/${sessionId}/interactive`;
+        await fetch(endpoint, { method: 'POST' });
         // Update local session state
         session.status = 'busy';
       } catch (err) {
