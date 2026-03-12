@@ -1291,8 +1291,7 @@ update() {
         success "codeman-web service restarted"
     else
         echo -e "  ${DIM}Restart codeman web to use the new version:${NC}"
-        echo -e "    ${DIM}Stop the running process (Ctrl+C), then:${NC}"
-        echo -e "    ${CYAN}codeman web${NC}"
+        echo -e "    ${CYAN}pkill -f 'codeman.*web'; codeman web &${NC}"
     fi
     echo ""
 }
