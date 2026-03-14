@@ -123,6 +123,7 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort): void {
 
     // Terminal output -> micro-batched WS send
     const onTerminal = (data: string) => {
+      if (socket.readyState !== 1) return;
       batchChunks.push(data);
       batchSize += data.length;
 
@@ -153,17 +154,22 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort): void {
       }
     };
 
+    // Close WS when session exits (deleted, respawned, or crashed) — prevents
+    // orphaned listeners and stale writes to a dead PTY.
+    const onSessionExit = () => {
+      socket.close(4009, 'Session terminated');
+    };
+
     session.on('terminal', onTerminal);
     session.on('clearTerminal', onClearTerminal);
     session.on('needsRefresh', onNeedsRefresh);
+    session.on('exit', onSessionExit);
 
     // Heartbeat: detect stale connections (especially through tunnels where
     // TCP RST can take minutes to propagate).
     let pongTimeout: ReturnType<typeof setTimeout> | null = null;
-    let alive = true;
 
     socket.on('pong', () => {
-      alive = true;
       if (pongTimeout) {
         clearTimeout(pongTimeout);
         pongTimeout = null;
@@ -171,12 +177,7 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort): void {
     });
 
     const pingInterval = setInterval(() => {
-      if (!alive) {
-        // Previous ping never got a pong — connection is dead
-        socket.terminate();
-        return;
-      }
-      alive = false;
+      if (socket.readyState !== 1) return;
       socket.ping();
       pongTimeout = setTimeout(() => {
         socket.terminate();
@@ -191,6 +192,7 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort): void {
       session.off('terminal', onTerminal);
       session.off('clearTerminal', onClearTerminal);
       session.off('needsRefresh', onNeedsRefresh);
+      session.off('exit', onSessionExit);
 
       // Decrement per-session connection count
       const count = sessionWsCount.get(id) ?? 1;

@@ -2904,6 +2904,7 @@ class CodemanApp {
       // Only mark ready if this is still the intended session
       if (this._ws === ws) {
         this._wsReady = true;
+        this._wsReconnectAttempts = 0;
       }
     };
 
@@ -2924,11 +2925,24 @@ class CodemanApp {
       }
     };
 
-    ws.onclose = () => {
-      if (this._ws === ws) {
-        this._ws = null;
-        this._wsSessionId = null;
-        this._wsReady = false;
+    ws.onclose = (event) => {
+      if (this._ws !== ws) return;
+      this._ws = null;
+      this._wsSessionId = null;
+      this._wsReady = false;
+
+      // Reconnect on unexpected close (server restart, network blip, ping timeout).
+      // Don't reconnect if we intentionally disconnected (_disconnectWs nulls onclose)
+      // or if the server rejected the session (4004=not found, 4008=too many, 4009=terminated).
+      if (event.code < 4004 && this.activeSessionId === sessionId) {
+        const delay = Math.min(1000 * Math.pow(2, this._wsReconnectAttempts || 0), 10000);
+        this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+        this._wsReconnectTimer = setTimeout(() => {
+          this._wsReconnectTimer = null;
+          if (this.activeSessionId === sessionId) {
+            this._connectWs(sessionId);
+          }
+        }, delay);
       }
     };
 
@@ -2939,6 +2953,11 @@ class CodemanApp {
 
   /** Close the active WebSocket connection (if any). */
   _disconnectWs() {
+    if (this._wsReconnectTimer) {
+      clearTimeout(this._wsReconnectTimer);
+      this._wsReconnectTimer = null;
+    }
+    this._wsReconnectAttempts = 0;
     if (this._ws) {
       this._ws.onclose = null; // Prevent re-entrant cleanup
       this._ws.close();
@@ -3762,6 +3781,10 @@ class CodemanApp {
 
     // Close WebSocket for previous session (new one opens after buffer load)
     this._disconnectWs();
+
+    // Clear CJK textarea to prevent sending stale text to the wrong session
+    const cjkEl = document.getElementById('cjkInput');
+    if (cjkEl) cjkEl.value = '';
 
     // Clean up flicker filter state when switching sessions
     if (this.flickerFilterTimeout) {
