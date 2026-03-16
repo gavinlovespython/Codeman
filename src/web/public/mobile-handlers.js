@@ -100,8 +100,12 @@ const MobileDetection = {
 
   /** Set --app-height CSS variable from visual viewport.
    *  On iPad Safari with tabs, 100vh extends behind the tab bar.
-   *  visualViewport.height reflects the actual visible area. */
+   *  visualViewport.height reflects the actual visible area.
+   *  Skips when virtual keyboard is open — KeyboardHandler manages
+   *  layout via translateY + paddingBottom; shrinking --app-height
+   *  would double-count and leave zero space for the terminal. */
   updateAppHeight() {
+    if (typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible) return;
     const vh = window.visualViewport?.height || window.innerHeight;
     document.documentElement.style.setProperty('--app-height', `${vh}px`);
   },
@@ -225,6 +229,10 @@ const KeyboardHandler = {
     if (heightDiff > 150 && !this.keyboardVisible) {
       this.keyboardVisible = true;
       document.body.classList.add('keyboard-visible');
+      // Restore --app-height: MobileDetection's resize listener fires before ours
+      // and may have already shrunk it for the keyboard viewport change.
+      // Use initialViewportHeight (captured before keyboard opened).
+      document.documentElement.style.setProperty('--app-height', `${this.initialViewportHeight}px`);
       this.onKeyboardShow();
     }
     // Keyboard hidden (viewport grew back close to initial)
@@ -234,6 +242,9 @@ const KeyboardHandler = {
       this.keyboardVisible = false;
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
+      // Re-sync --app-height now that keyboard is gone (MobileDetection skipped
+      // updates while keyboardVisible was true)
+      MobileDetection.updateAppHeight();
     }
 
     // Update baseline when keyboard is not visible — adapts to address bar

@@ -1,5 +1,15 @@
 # aicodeman
 
+## 0.4.4
+
+### Patch Changes
+
+- fix: mobile keyboard hides terminal content on iPhone
+
+  Fixed a bug where opening the virtual keyboard on iPhone left zero visible terminal space. Two independent mechanisms were both accounting for the keyboard height: `MobileDetection.updateAppHeight()` shrunk `--app-height` to the visual viewport height, while `KeyboardHandler.updateLayoutForKeyboard()` added a large `paddingBottom`. These double-counted, leaving negative space for the terminal (user saw accessory bar + toolbar but no terminal content).
+
+  Fix: `updateAppHeight()` now skips when the keyboard is visible, and `handleViewportResize()` restores `--app-height` to the pre-keyboard value on first detection (since MobileDetection's listener fires before KeyboardHandler's). On keyboard close, `--app-height` is re-synced to the current visual viewport.
+
 ## 0.4.3
 
 ### Patch Changes
