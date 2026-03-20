@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * ~90 event constants organized by category:
+ * ~106 event constants organized by category:
  * - **Core** (1): init
  * - **Session lifecycle** (17): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...

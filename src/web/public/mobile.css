@@ -1128,36 +1128,21 @@ html.mobile-init .file-browser-panel {
     display: block;
   }
 
-  /* Mobile terminal - native touch scrolling via xterm-viewport */
+  /* Mobile terminal — JS touch handler (terminal.scrollLines()) drives
+     scrollback because xterm.js DOM renderer doesn't populate xterm-viewport's
+     scroll area.  touch-action:none lets our JS handler own the gesture. */
   .terminal-container {
     height: 100%;
     min-height: 0;
     position: relative;
-    overflow: visible; /* Must not be hidden — blocks touch scroll on viewport */
-    touch-action: pan-y;
+    overflow: visible;
+    touch-action: none;
   }
 
-  .terminal-container .xterm {
-    touch-action: pan-y;
-  }
-
-  /* xterm-viewport is the scrollable element inside xterm.js.
-     It must sit above xterm-screen to receive touch events.
-     See: https://github.com/xtermjs/xterm.js/issues/5377 */
-  .terminal-container .xterm-viewport {
-    position: absolute !important;
-    top: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    z-index: 10 !important;
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
-    overflow-y: scroll !important;
-  }
-
+  .terminal-container .xterm,
+  .terminal-container .xterm-viewport,
   .terminal-container .xterm-screen {
-    touch-action: pan-y;
+    touch-action: none;
   }
 
   /* Compact welcome overlay for mobile */
@@ -2061,14 +2046,8 @@ html.mobile-init .file-browser-panel {
   overscroll-behavior: none;
 }
 
-.ios-device.safari-browser .terminal-container {
-  /* Keep momentum scrolling but prevent page bounce */
-  -webkit-overflow-scrolling: touch;
-}
-
-.ios-device.safari-browser .terminal-container .xterm-viewport {
-  -webkit-overflow-scrolling: touch;
-}
+/* JS touch handler now drives terminal scrollback — no native scroll needed.
+   -webkit-overflow-scrolling and overflow-y:scroll on xterm-viewport removed. */
 
 /* ============================================================================
    Hover State Fallbacks for Touch

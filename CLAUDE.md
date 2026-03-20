@@ -108,7 +108,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 | **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | |
 | **Infra** | `src/hooks-config.ts`, `src/push-store.ts`, `src/tunnel-manager.ts`, `src/image-watcher.ts`, `src/file-stream-manager.ts` | |
 | **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | |
-| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 route modules incl. `ws-routes.ts` + barrel), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
+| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 route modules incl. `ws-routes.ts` + barrel), `src/web/route-helpers.ts`, `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
 | **Frontend** | `src/web/public/app.js` (~2.6K lines, core) + 5 infra modules (`constants.js`, `mobile-handlers.js`, `voice-input.js`, `notification-manager.js`, `keyboard-accessory.js`) + 6 domain modules (`terminal-ui.js`, `respawn-ui.js`, `ralph-panel.js`, `settings-ui.js`, `panels-ui.js`, `session-ui.js`) + 4 feature modules (`ralph-wizard.js`, `api-client.js`, `subagent-windows.js`, `input-cjk.js`) + `sw.js` | |
 | **Types** | `src/types/index.ts` → 13 domain files | See `@fileoverview` in index.ts |
 

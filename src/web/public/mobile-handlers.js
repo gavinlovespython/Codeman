@@ -446,7 +446,7 @@ const KeyboardHandler = {
       const gap = container.clientHeight - app.terminal.rows * cellH;
       if (gap > 0 && gap < cellH) {
         const currentPadding = parseInt(main.style.paddingBottom) || 0;
-        main.style.paddingBottom = currentPadding + gap + 'px';
+        main.style.paddingBottom = Math.max(0, currentPadding - gap) + 'px';
         if (app.fitAddon)
           try {
             app.fitAddon.fit();

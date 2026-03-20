@@ -139,80 +139,82 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.scrollLines(lines);
     }, { passive: false });
 
-    // Touch scrolling - only use custom JS scrolling on desktop
-    // Mobile uses native browser scrolling via CSS touch-action: pan-y
-    const isMobileDevice = MobileDetection.isTouchDevice() && window.innerWidth < 1024;
-
-    if (!isMobileDevice) {
-      // Desktop touch scrolling with custom momentum
+    // Touch scrolling — use terminal.scrollLines() for all devices.
+    // xterm.js DOM renderer doesn't populate xterm-viewport's scroll area,
+    // so native CSS scrolling (overflow-y: scroll + touch-action: pan-y)
+    // has nothing to scroll. Instead, convert touch deltas into scrollLines()
+    // calls, matching the wheel handler above.
+    {
+      const cellHeight = () =>
+        this.terminal._core?._renderService?.dimensions?.css?.cell?.height || 13;
       let touchLastY = 0;
-      let pendingDelta = 0;
       let velocity = 0;
       let lastTime = 0;
       let scrollFrame = null;
       let isTouching = false;
 
-      const viewport = container.querySelector('.xterm-viewport');
-
-      // Single RAF loop handles both touch and momentum
       const scrollLoop = (timestamp) => {
-        if (!viewport) return;
-
-        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1; // Normalize to 60fps
+        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1;
         lastTime = timestamp;
 
-        if (isTouching) {
-          // During touch: apply pending delta
-          if (pendingDelta !== 0) {
-            viewport.scrollTop += pendingDelta;
-            pendingDelta = 0;
-          }
+        if (!isTouching && Math.abs(velocity) > 0.3) {
+          // Momentum phase — convert pixel velocity to lines
+          const lines = Math.round(velocity / cellHeight());
+          if (lines !== 0) this.terminal.scrollLines(lines);
+          velocity *= 0.92;
           scrollFrame = requestAnimationFrame(scrollLoop);
-        } else if (Math.abs(velocity) > 0.1) {
-          // Momentum phase
-          viewport.scrollTop += velocity * dt;
-          velocity *= 0.94; // Smooth deceleration
-          scrollFrame = requestAnimationFrame(scrollLoop);
-        } else {
+        } else if (!isTouching) {
           scrollFrame = null;
           velocity = 0;
+        } else {
+          scrollFrame = requestAnimationFrame(scrollLoop);
         }
       };
+
+      // Accumulate sub-line pixel deltas so slow swipes still scroll
+      let pixelAccum = 0;
 
       container.addEventListener('touchstart', (ev) => {
         if (ev.touches.length === 1) {
           touchLastY = ev.touches[0].clientY;
-          pendingDelta = 0;
           velocity = 0;
+          pixelAccum = 0;
           isTouching = true;
           lastTime = 0;
-          if (!scrollFrame) {
-            scrollFrame = requestAnimationFrame(scrollLoop);
-          }
+          if (scrollFrame) { cancelAnimationFrame(scrollFrame); scrollFrame = null; }
         }
       }, { passive: true });
 
       container.addEventListener('touchmove', (ev) => {
         if (ev.touches.length === 1 && isTouching) {
           const touchY = ev.touches[0].clientY;
-          const delta = touchLastY - touchY;
-          pendingDelta += delta;
-          velocity = delta * 1.2; // Track for momentum
+          const delta = touchLastY - touchY; // positive = scroll down
+          pixelAccum += delta;
+          velocity = delta * 1.2;
           touchLastY = touchY;
+          // Convert accumulated pixels to whole lines
+          const ch = cellHeight();
+          const lines = Math.trunc(pixelAccum / ch);
+          if (lines !== 0) {
+            this.terminal.scrollLines(lines);
+            pixelAccum -= lines * ch;
+          }
         }
       }, { passive: true });
 
       container.addEventListener('touchend', () => {
         isTouching = false;
-        // Momentum continues in scrollLoop
+        if (!scrollFrame && Math.abs(velocity) > 0.3) {
+          scrollFrame = requestAnimationFrame(scrollLoop);
+        }
       }, { passive: true });
 
       container.addEventListener('touchcancel', () => {
         isTouching = false;
         velocity = 0;
+        pixelAccum = 0;
       }, { passive: true });
     }
-    // Mobile: native scrolling handles touch via CSS
 
     // Welcome message
     this.showWelcome();
