@@ -26,6 +26,7 @@
  * | teams        | TeamConfig, TeamMember, TeamTask, InboxMessage, PaneInfo              | `~/.claude/teams/`, `~/.claude/tasks/` → `GET /api/teams` |
  * | push         | PushSubscriptionRecord, VapidKeys                                     | `~/.codeman/push-keys.json`, `~/.codeman/push-subscriptions.json` |
  * | plan         | PlanItem, PlanTaskStatus, TddPhase                                    | In-memory → `GET /api/sessions/:id/plan/tasks` |
+ * | orchestrator | OrchestratorState, OrchestratorPlan, OrchestratorConfig, OrchestratorPersistState | `~/.codeman/state.json` → `GET /api/orchestrator/status` |
  *
  * ## Cross-domain relationship map
  *
@@ -64,3 +65,4 @@ export * from './tools.js';
 export * from './teams.js';
 export * from './push.js';
 export * from './plan.js';
+export * from './orchestrator.js';

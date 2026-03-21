@@ -547,6 +547,30 @@ export class StateStore {
     this.save();
   }
 
+  // ========== Orchestrator Loop State Methods ==========
+
+  /** Returns the orchestrator loop state, or null if never initialized. */
+  getOrchestratorState() {
+    return this.state.orchestrator ?? null;
+  }
+
+  /** Updates orchestrator loop state (partial merge) and triggers a debounced save. */
+  setOrchestratorState(orchestrator: Partial<NonNullable<AppState['orchestrator']>>) {
+    if (this.state.orchestrator) {
+      this.state.orchestrator = { ...this.state.orchestrator, ...orchestrator };
+    } else {
+      // First initialization — caller must provide full state
+      this.state.orchestrator = orchestrator as NonNullable<AppState['orchestrator']>;
+    }
+    this.save();
+  }
+
+  /** Clears orchestrator state and triggers a debounced save. */
+  clearOrchestratorState() {
+    this.state.orchestrator = undefined;
+    this.save();
+  }
+
   /** Returns the application configuration. */
   getConfig() {
     return this.state.config;

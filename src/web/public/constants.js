@@ -277,6 +277,19 @@ const SSE_EVENTS = {
   PLAN_STARTED: 'plan:started',
   PLAN_CANCELLED: 'plan:cancelled',
   PLAN_COMPLETED: 'plan:completed',
+
+  // Orchestrator Loop
+  ORCHESTRATOR_STATE_CHANGED: 'orchestrator:stateChanged',
+  ORCHESTRATOR_PLAN_READY: 'orchestrator:planReady',
+  ORCHESTRATOR_PHASE_STARTED: 'orchestrator:phaseStarted',
+  ORCHESTRATOR_PHASE_COMPLETED: 'orchestrator:phaseCompleted',
+  ORCHESTRATOR_PHASE_FAILED: 'orchestrator:phaseFailed',
+  ORCHESTRATOR_VERIFICATION: 'orchestrator:verification',
+  ORCHESTRATOR_TASK_ASSIGNED: 'orchestrator:taskAssigned',
+  ORCHESTRATOR_TASK_COMPLETED: 'orchestrator:taskCompleted',
+  ORCHESTRATOR_TASK_FAILED: 'orchestrator:taskFailed',
+  ORCHESTRATOR_COMPLETED: 'orchestrator:completed',
+  ORCHESTRATOR_ERROR: 'orchestrator:error',
 };
 
 // ═══════════════════════════════════════════════════════════════

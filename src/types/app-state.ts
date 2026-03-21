@@ -109,6 +109,8 @@ export interface AppState {
   globalStats?: GlobalStats;
   /** Daily token usage statistics */
   tokenStats?: TokenStats;
+  /** Orchestrator Loop state (phased plan execution) */
+  orchestrator?: import('./orchestrator.js').OrchestratorPersistState;
 }
 
 // ========== Default Configuration ==========

@@ -235,6 +235,19 @@ const _SSE_HANDLER_MAP = [
   [SSE_EVENTS.PLAN_STARTED, '_onPlanStarted'],
   [SSE_EVENTS.PLAN_CANCELLED, '_onPlanCancelled'],
   [SSE_EVENTS.PLAN_COMPLETED, '_onPlanCompleted'],
+
+  // Orchestrator loop
+  [SSE_EVENTS.ORCHESTRATOR_STATE_CHANGED, '_onOrchestratorStateChanged'],
+  [SSE_EVENTS.ORCHESTRATOR_PLAN_READY, '_onOrchestratorPlanReady'],
+  [SSE_EVENTS.ORCHESTRATOR_PHASE_STARTED, '_onOrchestratorPhaseStarted'],
+  [SSE_EVENTS.ORCHESTRATOR_PHASE_COMPLETED, '_onOrchestratorPhaseCompleted'],
+  [SSE_EVENTS.ORCHESTRATOR_PHASE_FAILED, '_onOrchestratorPhaseFailed'],
+  [SSE_EVENTS.ORCHESTRATOR_VERIFICATION, '_onOrchestratorVerification'],
+  [SSE_EVENTS.ORCHESTRATOR_TASK_ASSIGNED, '_onOrchestratorTaskAssigned'],
+  [SSE_EVENTS.ORCHESTRATOR_TASK_COMPLETED, '_onOrchestratorTaskCompleted'],
+  [SSE_EVENTS.ORCHESTRATOR_TASK_FAILED, '_onOrchestratorTaskFailed'],
+  [SSE_EVENTS.ORCHESTRATOR_COMPLETED, '_onOrchestratorCompleted'],
+  [SSE_EVENTS.ORCHESTRATOR_ERROR, '_onOrchestratorError'],
 ];
 
 // ═══════════════════════════════════════════════════════════════
@@ -317,6 +330,10 @@ class CodemanApp {
     this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
     this.logViewerWindowZIndex = ZINDEX_LOG_VIEWER_BASE;
     this.projectInsightsPanelVisible = false;
+
+    // Orchestrator loop state
+    this.orchestratorState = null; // { state, plan, currentPhaseIndex, stats }
+    this.orchestratorPanelVisible = false;
     this.currentSessionWorkingDir = null; // Track current session's working dir for path normalization
 
     // Image popup windows (auto-open for detected screenshots/images)

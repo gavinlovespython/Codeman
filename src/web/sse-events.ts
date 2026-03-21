@@ -5,7 +5,7 @@
  * and referenced by the frontend (`SSE_EVENTS` in `constants.js`).
  * Both files MUST be kept in sync.
  *
- * ~106 event constants organized by category:
+ * ~117 event constants organized by category:
  * - **Core** (1): init
  * - **Session lifecycle** (17): created, updated, deleted, terminal, idle, working, ...
  * - **Session: Ralph** (6): ralphLoopUpdate, todoUpdate, completionDetected, ...
@@ -292,6 +292,31 @@ export const HookTeammateIdle = 'hook:teammate_idle' as const;
 /** Claude Code hook: teammate task completed. */
 export const HookTaskCompleted = 'hook:task_completed' as const;
 
+// ─── Orchestrator ────────────────────────────────────────────────────────────
+
+/** Orchestrator state machine transitioned. */
+export const OrchestratorStateChanged = 'orchestrator:stateChanged' as const;
+/** Orchestrator plan generated and ready for approval. */
+export const OrchestratorPlanReady = 'orchestrator:planReady' as const;
+/** Orchestrator phase started executing. */
+export const OrchestratorPhaseStarted = 'orchestrator:phaseStarted' as const;
+/** Orchestrator phase completed successfully. */
+export const OrchestratorPhaseCompleted = 'orchestrator:phaseCompleted' as const;
+/** Orchestrator phase failed. */
+export const OrchestratorPhaseFailed = 'orchestrator:phaseFailed' as const;
+/** Orchestrator verification result for a phase. */
+export const OrchestratorVerification = 'orchestrator:verification' as const;
+/** Orchestrator task assigned to session. */
+export const OrchestratorTaskAssigned = 'orchestrator:taskAssigned' as const;
+/** Orchestrator task completed. */
+export const OrchestratorTaskCompleted = 'orchestrator:taskCompleted' as const;
+/** Orchestrator task failed. */
+export const OrchestratorTaskFailed = 'orchestrator:taskFailed' as const;
+/** All orchestrator phases completed successfully. */
+export const OrchestratorCompleted = 'orchestrator:completed' as const;
+/** Orchestrator error. */
+export const OrchestratorError = 'orchestrator:error' as const;
+
 // ─── Cases ───────────────────────────────────────────────────────────────────
 
 /** New case directory created. */
@@ -440,6 +465,19 @@ export const SseEvent = {
   HookStop,
   HookTeammateIdle,
   HookTaskCompleted,
+
+  // Orchestrator
+  OrchestratorStateChanged,
+  OrchestratorPlanReady,
+  OrchestratorPhaseStarted,
+  OrchestratorPhaseCompleted,
+  OrchestratorPhaseFailed,
+  OrchestratorVerification,
+  OrchestratorTaskAssigned,
+  OrchestratorTaskCompleted,
+  OrchestratorTaskFailed,
+  OrchestratorCompleted,
+  OrchestratorError,
 
   // Cases
   CaseCreated,

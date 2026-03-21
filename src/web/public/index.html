@@ -137,6 +137,17 @@
       </div>
     </div>
 
+    <!-- Orchestrator Loop Panel -->
+    <div class="orchestrator-panel" id="orchestratorPanel" style="display: none;">
+      <div class="orchestrator-header">
+        <span class="orchestrator-title">Orchestrator</span>
+        <span class="orchestrator-state-badge" id="orchestratorStateBadge">idle</span>
+        <div class="orchestrator-actions" id="orchestratorActions"></div>
+        <button class="orchestrator-close-btn" onclick="app.closeOrchestratorPanel()" title="Close">&times;</button>
+      </div>
+      <div class="orchestrator-body" id="orchestratorBody"></div>
+    </div>
+
     <!-- Ralph / Todo Tracker Panel -->
     <div class="ralph-panel collapsed" id="ralphStatePanel" style="display: none;">
       <!-- Collapsed Summary Bar -->
@@ -1704,6 +1715,7 @@
   <script defer src="terminal-ui.js"></script>
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>
+  <script defer src="orchestrator-panel.js"></script>
   <script defer src="settings-ui.js"></script>
   <script defer src="panels-ui.js"></script>
   <script defer src="session-ui.js"></script>

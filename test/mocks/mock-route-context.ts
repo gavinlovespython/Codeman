@@ -113,6 +113,10 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     qrAuthFailures: null,
     // https already declared above in ConfigPort (shared property)
 
+    // -- OrchestratorPort --
+    orchestratorLoop: null,
+    initOrchestratorLoop: vi.fn(),
+
     // Convenience accessors (not part of any port interface)
     _session: session,
     _sessionId: sessionId,

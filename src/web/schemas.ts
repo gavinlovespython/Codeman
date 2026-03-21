@@ -580,3 +580,31 @@ export type RespawnEnableInput = z.infer<typeof RespawnEnableSchema>;
 export type PushSubscribeInput = z.infer<typeof PushSubscribeSchema>;
 export type PushPreferencesUpdateInput = z.infer<typeof PushPreferencesUpdateSchema>;
 export type RalphLoopStartInput = z.infer<typeof RalphLoopStartSchema>;
+
+// ========== Orchestrator Loop ==========
+
+/** POST /api/orchestrator/start */
+export const OrchestratorStartSchema = z.object({
+  goal: z.string().min(1).max(100000),
+  config: z
+    .object({
+      plannerModel: z.string().max(100).optional(),
+      researchEnabled: z.boolean().optional(),
+      autoApprove: z.boolean().optional(),
+      maxPhaseRetries: z.number().int().min(1).max(10).optional(),
+      phaseTimeoutMs: z.number().int().min(60000).max(7200000).optional(),
+      enableTeamAgents: z.boolean().optional(),
+      maxParallelSessions: z.number().int().min(1).max(10).optional(),
+      verificationMode: z.enum(['strict', 'moderate', 'lenient']).optional(),
+      compactBetweenPhases: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+/** POST /api/orchestrator/reject */
+export const OrchestratorRejectSchema = z.object({
+  feedback: z.string().min(1).max(10000),
+});
+
+export type OrchestratorStartInput = z.infer<typeof OrchestratorStartSchema>;
+export type OrchestratorRejectInput = z.infer<typeof OrchestratorRejectSchema>;

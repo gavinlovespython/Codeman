@@ -70,6 +70,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator } from '../plan-orchestrator.js';
+import { OrchestratorLoop } from '../orchestrator-loop.js';
 import { getLifecycleLog } from '../session-lifecycle-log.js';
 import { PushSubscriptionStore } from '../push-store.js';
 import webpush from 'web-push';
@@ -104,6 +105,7 @@ import {
   registerRespawnRoutes,
   registerRalphRoutes,
   registerPlanRoutes,
+  registerOrchestratorRoutes,
   registerWsRoutes,
 } from './routes/index.js';
 
@@ -280,6 +282,7 @@ export class WebServer extends EventEmitter {
   private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
+  private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
     teamUpdated: (config: unknown) => void;
@@ -537,6 +540,9 @@ export class WebServer extends EventEmitter {
       // AuthPort
       authSessions: this.authSessions,
       qrAuthFailures: this.qrAuthFailures,
+      // OrchestratorPort
+      orchestratorLoop: this._orchestratorLoop,
+      initOrchestratorLoop: () => this.initOrchestratorLoop(),
     };
   }
 
@@ -705,6 +711,7 @@ export class WebServer extends EventEmitter {
     registerRespawnRoutes(this.app, ctx);
     registerRalphRoutes(this.app, ctx);
     registerPlanRoutes(this.app, ctx);
+    registerOrchestratorRoutes(this.app, ctx);
     registerWsRoutes(this.app, ctx);
   }
 
@@ -2705,6 +2712,13 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  private initOrchestratorLoop(): import('../orchestrator-loop.js').OrchestratorLoop {
+    if (this._orchestratorLoop) return this._orchestratorLoop;
+
+    this._orchestratorLoop = new OrchestratorLoop(this.mux, process.cwd());
+    return this._orchestratorLoop;
+  }
+
   async stop(): Promise<void> {
     getLifecycleLog().log({ event: 'server_stopped', sessionId: '*' });
     // Set stopping flag to prevent new timer creation during shutdown
@@ -2766,6 +2780,13 @@ export class WebServer extends EventEmitter {
       controller.removeAllListeners();
     }
     this.respawnControllers.clear();
+
+    // Stop orchestrator loop if running
+    if (this._orchestratorLoop) {
+      await this._orchestratorLoop.stop();
+      this._orchestratorLoop.destroy();
+      this._orchestratorLoop = null;
+    }
 
     // Stop all scheduled runs first (they have their own session cleanup)
     await Promise.allSettled(Array.from(this.scheduledRuns.keys()).map((id) => this.stopScheduledRun(id)));
