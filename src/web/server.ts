@@ -488,6 +488,8 @@ export class WebServer extends EventEmitter {
    * Single object with zero runtime cost — ISP enforced at the type level.
    */
   private createRouteContext() {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
     return {
       // SessionPort
       sessions: this.sessions as ReadonlyMap<string, Session>,
@@ -540,8 +542,10 @@ export class WebServer extends EventEmitter {
       // AuthPort
       authSessions: this.authSessions,
       qrAuthFailures: this.qrAuthFailures,
-      // OrchestratorPort
-      orchestratorLoop: this._orchestratorLoop,
+      // OrchestratorPort — use getter so routes always see current value (not a null snapshot)
+      get orchestratorLoop() {
+        return self._orchestratorLoop;
+      },
       initOrchestratorLoop: () => this.initOrchestratorLoop(),
     };
   }

@@ -100,6 +100,9 @@ export class OrchestratorLoop extends EventEmitter {
   /** Phase poll timer for checking task completion */
   private phasePollTimer: NodeJS.Timeout | null = null;
 
+  /** Phase-level timeout timer */
+  private phaseTimeoutTimer: NodeJS.Timeout | null = null;
+
   /** Session completion listener (bound for cleanup) */
   private sessionCompletionListener: ((sessionId: string, phrase: string) => void) | null = null;
 
@@ -141,7 +144,7 @@ export class OrchestratorLoop extends EventEmitter {
         console.log(`[Orchestrator] Planning: ${phase} — ${detail}`);
       });
 
-      if ((this._state as OrchestratorState) !== 'planning') {
+      if (this.currentState() !== 'planning') {
         // Cancelled during planning
         return;
       }
@@ -163,9 +166,7 @@ export class OrchestratorLoop extends EventEmitter {
 
   /** Approve the generated plan. Transitions: approval → executing */
   async approve(): Promise<void> {
-    if ((this._state as OrchestratorState) !== 'approval') {
-      throw new Error(`Cannot approve from state "${this._state}"`);
-    }
+    this.requireState('approval');
     if (!this.plan) {
       throw new Error('No plan to approve');
     }
@@ -176,9 +177,7 @@ export class OrchestratorLoop extends EventEmitter {
 
   /** Reject plan with feedback. Transitions: approval → planning (regenerate) */
   async reject(feedback: string): Promise<void> {
-    if ((this._state as OrchestratorState) !== 'approval') {
-      throw new Error(`Cannot reject from state "${this._state}"`);
-    }
+    this.requireState('approval');
     if (!this.plan) {
       throw new Error('No plan to reject');
     }
@@ -208,6 +207,7 @@ export class OrchestratorLoop extends EventEmitter {
     }
     this.pausedState = this._state;
     this.clearPhasePoll();
+    this.cleanupTaskHandlers();
     this.setState('paused');
   }
 
@@ -540,12 +540,24 @@ export class OrchestratorLoop extends EventEmitter {
       }
       this.pollPhaseStatus(phase);
     }, PHASE_POLL_INTERVAL_MS);
+
+    // Phase-level timeout — fail the phase if it exceeds the configured timeout
+    this.phaseTimeoutTimer = setTimeout(() => {
+      if (this._state === 'executing' && phase.status === 'executing') {
+        console.warn(`[Orchestrator] Phase "${phase.name}" timed out after ${this.config.phaseTimeoutMs}ms`);
+        this.handlePhaseError(phase, `Phase timed out after ${Math.round(this.config.phaseTimeoutMs / 60000)} minutes`);
+      }
+    }, this.config.phaseTimeoutMs);
   }
 
   private clearPhasePoll(): void {
     if (this.phasePollTimer) {
       clearInterval(this.phasePollTimer);
       this.phasePollTimer = null;
+    }
+    if (this.phaseTimeoutTimer) {
+      clearTimeout(this.phaseTimeoutTimer);
+      this.phaseTimeoutTimer = null;
     }
   }
 
@@ -634,10 +646,16 @@ export class OrchestratorLoop extends EventEmitter {
 
     this.setState('verifying');
 
-    // Get a session for verification
-    const sessions = this.sessionManager.getIdleSessions();
+    // Get a session for verification — wait briefly for sessions to become idle
+    let sessions = this.sessionManager.getIdleSessions();
     if (sessions.length === 0) {
-      // No idle sessions — mark as passed (can't verify)
+      // Wait up to 10s for a session to become idle
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      sessions = this.sessionManager.getIdleSessions();
+    }
+    if (sessions.length === 0) {
+      // Still no sessions — log warning and skip verification (don't silently pass)
+      console.warn('[Orchestrator] No idle sessions for verification — skipping (marking passed with warning)');
       phase.status = 'passed';
       phase.completedAt = Date.now();
       phase.durationMs = phase.startedAt ? Date.now() - phase.startedAt : null;
@@ -720,8 +738,7 @@ export class OrchestratorLoop extends EventEmitter {
   }
 
   private async replanPhase(phase: OrchestratorPhase, result: VerificationResult): Promise<void> {
-    const sessions = this.sessionManager.getIdleSessions();
-    if (sessions.length === 0) return;
+    const completionPhrase = phase.tasks[0]?.completionPhrase || `${phase.id.toUpperCase()}_FIXED`;
 
     const prompt = REPLAN_PROMPT.replace('{PHASE_NAME}', phase.name)
       .replace('{ATTEMPT_NUMBER}', String(phase.attempts))
@@ -729,15 +746,58 @@ export class OrchestratorLoop extends EventEmitter {
       .replace('{FAILURE_SUMMARY}', result.summary)
       .replace('{SUGGESTIONS}', result.suggestions.join('\n'))
       .replace('{ORIGINAL_TASKS}', phase.tasks.map((t, i) => `${i + 1}. ${t.prompt}`).join('\n'))
-      .replace('{COMPLETION_PHRASE}', phase.tasks[0]?.completionPhrase || `${phase.id.toUpperCase()}_FIXED`);
+      .replace('{COMPLETION_PHRASE}', completionPhrase);
 
-    // Send the replan prompt to an idle session
-    await sessions[0].sendInput(prompt);
+    // Create a tracked queue task for the replan (so completion is detected)
+    const queueTask = this.taskQueue.addTask({
+      prompt,
+      workingDir: this.workingDir,
+      priority: 100,
+      completionPhrase,
+      timeoutMs: this.config.phaseTimeoutMs,
+    });
+
+    // Link to first phase task for tracking
+    if (phase.tasks[0]) {
+      phase.tasks[0].queueTaskId = queueTask.id;
+      phase.tasks[0].status = 'running';
+    }
+
+    this.persist();
+
+    // Assign to a session
+    const sessions = this.sessionManager.getIdleSessions();
+    if (sessions.length === 0) {
+      console.warn('[Orchestrator] No idle sessions for replan — task queued, waiting');
+      return;
+    }
+
+    try {
+      queueTask.assign(sessions[0].id);
+      sessions[0].assignTask(queueTask.id);
+      this.taskQueue.updateTask(queueTask);
+      await sessions[0].sendInput(prompt);
+    } catch (err) {
+      queueTask.fail(getErrorMessage(err));
+      this.taskQueue.updateTask(queueTask);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
   // Internal — State Machine
   // ═══════════════════════════════════════════════════════════════
+
+  /** Read current state (bypasses TypeScript narrowing from guards) */
+  private currentState(): OrchestratorState {
+    return this._state;
+  }
+
+  /** Assert state matches expected or throw */
+  private requireState(...expected: OrchestratorState[]): void {
+    if (!expected.includes(this._state)) {
+      throw new Error(`Expected state "${expected.join('|')}", got "${this._state}"`);
+    }
+  }
 
   private setState(newState: OrchestratorState): void {
     const prev = this._state;
