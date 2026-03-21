@@ -103,6 +103,9 @@ export class OrchestratorLoop extends EventEmitter {
   /** Phase-level timeout timer */
   private phaseTimeoutTimer: NodeJS.Timeout | null = null;
 
+  /** Post-phase delay timer before verification */
+  private postPhaseTimer: NodeJS.Timeout | null = null;
+
   /** Session completion listener (bound for cleanup) */
   private sessionCompletionListener: ((sessionId: string, phrase: string) => void) | null = null;
 
@@ -559,6 +562,10 @@ export class OrchestratorLoop extends EventEmitter {
       clearTimeout(this.phaseTimeoutTimer);
       this.phaseTimeoutTimer = null;
     }
+    if (this.postPhaseTimer) {
+      clearTimeout(this.postPhaseTimer);
+      this.postPhaseTimer = null;
+    }
   }
 
   private pollPhaseStatus(phase: OrchestratorPhase): void {
@@ -615,8 +622,9 @@ export class OrchestratorLoop extends EventEmitter {
       // Phase has failed tasks
       this.handlePhaseError(phase, 'One or more tasks failed');
     } else {
-      // All tasks completed — run verification
-      setTimeout(() => {
+      // All tasks completed — run verification after brief delay
+      this.postPhaseTimer = setTimeout(() => {
+        this.postPhaseTimer = null;
         this.verifyCurrentPhase().catch((err) => this.handleError(err));
       }, POST_PHASE_DELAY_MS);
     }
@@ -765,10 +773,15 @@ export class OrchestratorLoop extends EventEmitter {
 
     this.persist();
 
+    // Set up handlers so task completion is tracked
+    this.setupTaskHandlers();
+
     // Assign to a session
     const sessions = this.sessionManager.getIdleSessions();
     if (sessions.length === 0) {
-      console.warn('[Orchestrator] No idle sessions for replan — task queued, waiting');
+      console.warn('[Orchestrator] No idle sessions for replan — task queued, will pick up on next poll');
+      // Start polling so the task gets assigned when a session becomes idle
+      this.startPhasePoll(phase);
       return;
     }
 

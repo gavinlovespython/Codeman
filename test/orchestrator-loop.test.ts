@@ -547,6 +547,32 @@ describe('OrchestratorLoop', () => {
       // After pause, listener should be removed
       expect(mockSessionManager.listenerCount('sessionCompletion')).toBeLessThan(listenerCount);
     });
+
+    it('cancels pending verify timer on pause', async () => {
+      const plan = createTestPlan();
+      plan.phases = [plan.phases[0]]; // No verification criteria
+      mockPlannerInstance.generatePlan.mockResolvedValue(plan);
+
+      // Tasks complete immediately — triggers post-phase delay timer
+      mockTaskQueue.addTask.mockImplementation((options) => {
+        const task = createMockTask(options);
+        task.complete();
+        mockTaskQueue._tasks.set(task.id, task);
+        return task;
+      });
+
+      await loop.start('Goal');
+      await loop.approve();
+
+      // Wait for poll to detect completion (2s) but pause before verify runs (1s delay)
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      loop.pause();
+      expect(loop.state).toBe('paused');
+
+      // Wait past where verify would have fired — state should still be paused
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      expect(loop.state).toBe('paused');
+    });
   });
 
   describe('resume()', () => {

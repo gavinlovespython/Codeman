@@ -38,10 +38,10 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     return loop;
   }
 
-  let eventForwardingAttached = false;
+  let forwardingLoop: import('../../orchestrator-loop.js').OrchestratorLoop | null = null;
   function setupEventForwarding(loop: import('../../orchestrator-loop.js').OrchestratorLoop) {
-    if (eventForwardingAttached) return;
-    eventForwardingAttached = true;
+    if (forwardingLoop === loop) return; // Already attached to this loop instance
+    forwardingLoop = loop;
     loop.on('stateChanged', (state, prevState) => {
       ctx.broadcast(SseEvent.OrchestratorStateChanged, { state, prevState });
     });
