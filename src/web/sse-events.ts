@@ -296,6 +296,8 @@ export const HookTaskCompleted = 'hook:task_completed' as const;
 
 /** Orchestrator state machine transitioned. */
 export const OrchestratorStateChanged = 'orchestrator:stateChanged' as const;
+/** Orchestrator plan generation progress update. */
+export const OrchestratorPlanProgress = 'orchestrator:planProgress' as const;
 /** Orchestrator plan generated and ready for approval. */
 export const OrchestratorPlanReady = 'orchestrator:planReady' as const;
 /** Orchestrator phase started executing. */
@@ -468,6 +470,7 @@ export const SseEvent = {
 
   // Orchestrator
   OrchestratorStateChanged,
+  OrchestratorPlanProgress,
   OrchestratorPlanReady,
   OrchestratorPhaseStarted,
   OrchestratorPhaseCompleted,

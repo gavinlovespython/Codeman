@@ -42,6 +42,17 @@ Object.assign(CodemanApp.prototype, {
   _onOrchestratorStateChanged(data) {
     if (!this.orchestratorState) this.orchestratorState = {};
     this.orchestratorState.state = data.state;
+    if (data.state === 'planning') {
+      this.orchestratorState.planProgress = [];
+      this.showOrchestratorPanel();
+    }
+    this.renderOrchestratorPanel();
+  },
+
+  _onOrchestratorPlanProgress(data) {
+    if (!this.orchestratorState) this.orchestratorState = {};
+    if (!this.orchestratorState.planProgress) this.orchestratorState.planProgress = [];
+    this.orchestratorState.planProgress.push({ phase: data.phase, detail: data.detail, time: Date.now() });
     this.renderOrchestratorPanel();
   },
 
@@ -328,7 +339,15 @@ Object.assign(CodemanApp.prototype, {
     }
 
     if (state === 'planning') {
-      return '<div class="orch-planning"><div class="orch-spinner"></div>Generating plan...</div>';
+      const progress = this.orchestratorState?.planProgress || [];
+      let progressHtml = '';
+      if (progress.length > 0) {
+        const items = progress.map(p =>
+          `<div class="orch-progress-item"><span class="orch-progress-phase">${escapeHtml(p.phase)}</span> ${escapeHtml(p.detail)}</div>`
+        ).join('');
+        progressHtml = `<div class="orch-progress-log">${items}</div>`;
+      }
+      return `<div class="orch-planning"><div class="orch-spinner"></div>Generating plan...${progressHtml}</div>`;
     }
 
     if (!plan) return '';

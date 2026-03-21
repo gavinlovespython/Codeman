@@ -62,6 +62,7 @@ const POST_PHASE_DELAY_MS = 1000;
 
 export interface OrchestratorLoopEvents {
   stateChanged: (state: OrchestratorState, prevState: OrchestratorState) => void;
+  planProgress: (phase: string, detail: string) => void;
   planReady: (plan: OrchestratorPlan) => void;
   phaseStarted: (phase: OrchestratorPhase) => void;
   phaseCompleted: (phase: OrchestratorPhase) => void;
@@ -143,8 +144,7 @@ export class OrchestratorLoop extends EventEmitter {
 
     try {
       const plan = await this.planner.generatePlan(goal, (phase, detail) => {
-        // Forward planning progress — could emit an event here
-        console.log(`[Orchestrator] Planning: ${phase} — ${detail}`);
+        this.emit('planProgress', phase, detail);
       });
 
       if (this.currentState() !== 'planning') {

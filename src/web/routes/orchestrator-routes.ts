@@ -45,6 +45,9 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     loop.on('stateChanged', (state, prevState) => {
       ctx.broadcast(SseEvent.OrchestratorStateChanged, { state, prevState });
     });
+    loop.on('planProgress', (phase, detail) => {
+      ctx.broadcast(SseEvent.OrchestratorPlanProgress, { phase, detail });
+    });
     loop.on('planReady', (plan) => {
       ctx.broadcast(SseEvent.OrchestratorPlanReady, { plan });
     });

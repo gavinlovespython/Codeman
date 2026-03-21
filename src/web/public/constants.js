@@ -280,6 +280,7 @@ const SSE_EVENTS = {
 
   // Orchestrator Loop
   ORCHESTRATOR_STATE_CHANGED: 'orchestrator:stateChanged',
+  ORCHESTRATOR_PLAN_PROGRESS: 'orchestrator:planProgress',
   ORCHESTRATOR_PLAN_READY: 'orchestrator:planReady',
   ORCHESTRATOR_PHASE_STARTED: 'orchestrator:phaseStarted',
   ORCHESTRATOR_PHASE_COMPLETED: 'orchestrator:phaseCompleted',
