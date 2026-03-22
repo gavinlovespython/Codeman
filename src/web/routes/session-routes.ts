@@ -965,7 +965,12 @@ export function registerSessionRoutes(
   /** Extract the text of the first user message from a JSONL transcript head. */
   function extractFirstUserPrompt(head: string): string | undefined {
     const MAX_PROMPT_LEN = 120;
-    for (const line of head.split('\n')) {
+    // Iterate lines without allocating a full split array
+    let start = 0;
+    while (start < head.length) {
+      const end = head.indexOf('\n', start);
+      const line = end === -1 ? head.slice(start) : head.slice(start, end);
+      start = end === -1 ? head.length : end + 1;
       if (!line.includes('"type":"user"')) continue;
       try {
         const entry = JSON.parse(line);
@@ -995,6 +1000,18 @@ export function registerSessionRoutes(
     return undefined;
   }
 
+  /** Read the first 16KB of a file for content sniffing. */
+  async function readFileHead(path: string, buf: Buffer): Promise<string | null> {
+    try {
+      const fd = await fs.open(path, 'r');
+      const { bytesRead } = await fd.read(buf, 0, buf.length, 0);
+      await fd.close();
+      return buf.toString('utf8', 0, bytesRead);
+    } catch {
+      return null;
+    }
+  }
+
   app.get('/api/history/sessions', async () => {
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
     const results: Array<{
@@ -1005,6 +1022,7 @@ export function registerSessionRoutes(
       lastModified: string;
       firstPrompt?: string;
     }> = [];
+    const headBuf = Buffer.alloc(16384);
 
     try {
       const projectDirs = await fs.readdir(projectsDir);
@@ -1042,20 +1060,9 @@ export function registerSessionRoutes(
           // no "user"/"assistant" messages and will fail claude --resume.
           // Read first 16KB to check content and extract first user prompt.
           let firstPrompt: string | undefined;
-          const readHead = async (): Promise<string | null> => {
-            try {
-              const fd = await fs.open(filePath, 'r');
-              const buf = Buffer.alloc(16384);
-              const { bytesRead } = await fd.read(buf, 0, 16384, 0);
-              await fd.close();
-              return buf.toString('utf8', 0, bytesRead);
-            } catch {
-              return null;
-            }
-          };
+          const head = await readFileHead(filePath, headBuf);
 
           if (fileStat.size < 50000) {
-            const head = await readHead();
             if (
               !head ||
               (!head.includes('"type":"user"') &&
@@ -1064,12 +1071,8 @@ export function registerSessionRoutes(
             ) {
               continue; // No conversation content — skip
             }
-            firstPrompt = extractFirstUserPrompt(head);
-          } else {
-            // Large files are almost certainly real conversations; still read head for prompt
-            const head = await readHead();
-            if (head) firstPrompt = extractFirstUserPrompt(head);
           }
+          if (head) firstPrompt = extractFirstUserPrompt(head);
 
           results.push({
             sessionId,
