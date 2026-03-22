@@ -2134,10 +2134,25 @@ body {
   background: var(--bg-hover);
 }
 
-.history-item-dir {
+.history-item-text {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.history-item-title {
   font-size: 0.8rem;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item-subtitle {
+  font-size: 0.65rem;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5009,6 +5024,16 @@ kbd {
 
 .process-item:hover {
   background: var(--bg-hover);
+}
+
+.process-item-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  border: 1px solid transparent;
+}
+
+.process-item-clickable:hover {
+  border-color: var(--accent);
 }
 
 .process-info {

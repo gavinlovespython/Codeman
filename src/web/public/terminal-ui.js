@@ -704,9 +704,18 @@ Object.assign(CodemanApp.prototype, {
         item.title = s.workingDir;
         item.addEventListener('click', () => this.resumeHistorySession(s.sessionId, s.workingDir));
 
-        const dirSpan = document.createElement('span');
-        dirSpan.className = 'history-item-dir';
-        dirSpan.textContent = shortDir;
+        const textCol = document.createElement('div');
+        textCol.className = 'history-item-text';
+
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'history-item-title';
+        titleSpan.textContent = s.firstPrompt || shortDir;
+
+        const subtitleSpan = document.createElement('span');
+        subtitleSpan.className = 'history-item-subtitle';
+        subtitleSpan.textContent = shortDir;
+
+        textCol.append(titleSpan, subtitleSpan);
 
         const metaSpan = document.createElement('span');
         metaSpan.className = 'history-item-meta';
@@ -716,7 +725,7 @@ Object.assign(CodemanApp.prototype, {
         sizeSpan.className = 'history-item-size';
         sizeSpan.textContent = size;
 
-        item.append(dirSpan, metaSpan, sizeSpan);
+        item.append(textCol, metaSpan, sizeSpan);
         list.appendChild(item);
       }
 

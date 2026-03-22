@@ -3049,8 +3049,9 @@ Object.assign(CodemanApp.prototype, {
         modelHtml = `<span class="monitor-model-badge ${modelShort}">${modelShort}</span>`;
       }
 
+      const sid = escapeHtml(muxSession.sessionId);
       html += `
-        <div class="process-item">
+        <div class="process-item process-item-clickable" onclick="app.selectSession('${sid}')" title="Switch to session">
           <span class="monitor-status-badge ${statusClass}">${statusLabel}</span>
           <div class="process-info">
             <div class="process-name">${modelHtml} ${escapeHtml(muxSession.name || muxSession.muxName)}</div>
@@ -3063,7 +3064,7 @@ Object.assign(CodemanApp.prototype, {
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${escapeHtml(muxSession.sessionId)}')" title="Kill session">Kill</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="event.stopPropagation(); app.killMuxSession('${sid}')" title="Kill session">Kill</button>
           </div>
         </div>
       `;

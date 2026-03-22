@@ -962,6 +962,39 @@ export function registerSessionRoutes(
   // History — list past Claude conversations for resume
   // ═══════════════════════════════════════════════════════════════
 
+  /** Extract the text of the first user message from a JSONL transcript head. */
+  function extractFirstUserPrompt(head: string): string | undefined {
+    const MAX_PROMPT_LEN = 120;
+    for (const line of head.split('\n')) {
+      if (!line.includes('"type":"user"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== 'user' || !entry.message) continue;
+        const content = entry.message.content;
+        let text: string | undefined;
+        if (typeof content === 'string') {
+          text = content;
+        } else if (Array.isArray(content)) {
+          const textBlock = content.find((b: { type: string }) => b.type === 'text');
+          if (textBlock) text = textBlock.text;
+        }
+        if (!text) continue;
+        // Strip XML-like system/command tags that Claude Code injects into transcripts
+        text = text
+          .replace(/<[^>]+>/g, '')
+          .trim()
+          .replace(/\s+/g, ' ');
+        if (!text) continue;
+        // Skip system-injected messages and slash command artifacts (not real user prompts)
+        if (/^(Caveat:|init\b|clear\b|\/\w+ \w+$|You are a )/i.test(text)) continue;
+        return text.length > MAX_PROMPT_LEN ? text.slice(0, MAX_PROMPT_LEN) + '…' : text;
+      } catch {
+        // Malformed line — skip
+      }
+    }
+    return undefined;
+  }
+
   app.get('/api/history/sessions', async () => {
     const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
     const results: Array<{
@@ -970,6 +1003,7 @@ export function registerSessionRoutes(
       projectKey: string;
       sizeBytes: number;
       lastModified: string;
+      firstPrompt?: string;
     }> = [];
 
     try {
@@ -1006,24 +1040,35 @@ export function registerSessionRoutes(
           // Quick content check: verify actual conversation data exists.
           // Sessions with only file-history-snapshot or hook_progress entries have
           // no "user"/"assistant" messages and will fail claude --resume.
-          // Files > 50KB are almost certainly real conversations (skip the read).
-          if (fileStat.size < 50000) {
+          // Read first 16KB to check content and extract first user prompt.
+          let firstPrompt: string | undefined;
+          const readHead = async (): Promise<string | null> => {
             try {
               const fd = await fs.open(filePath, 'r');
               const buf = Buffer.alloc(16384);
               const { bytesRead } = await fd.read(buf, 0, 16384, 0);
               await fd.close();
-              const head = buf.toString('utf8', 0, bytesRead);
-              if (
-                !head.includes('"type":"user"') &&
-                !head.includes('"type":"assistant"') &&
-                !head.includes('"type":"summary"')
-              ) {
-                continue; // No conversation content — skip
-              }
+              return buf.toString('utf8', 0, bytesRead);
             } catch {
-              continue;
+              return null;
             }
+          };
+
+          if (fileStat.size < 50000) {
+            const head = await readHead();
+            if (
+              !head ||
+              (!head.includes('"type":"user"') &&
+                !head.includes('"type":"assistant"') &&
+                !head.includes('"type":"summary"'))
+            ) {
+              continue; // No conversation content — skip
+            }
+            firstPrompt = extractFirstUserPrompt(head);
+          } else {
+            // Large files are almost certainly real conversations; still read head for prompt
+            const head = await readHead();
+            if (head) firstPrompt = extractFirstUserPrompt(head);
           }
 
           results.push({
@@ -1032,6 +1077,7 @@ export function registerSessionRoutes(
             projectKey: projDir,
             sizeBytes: fileStat.size,
             lastModified: fileStat.mtime.toISOString(),
+            firstPrompt,
           });
         }
       }
