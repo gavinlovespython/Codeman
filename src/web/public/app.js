@@ -2153,11 +2153,14 @@ class CodemanApp {
       // canvas may be at stale dimensions — content would render at wrong width.
       if (this.fitAddon) this.fitAddon.fit();
 
-      // Instant cache restore — show previous buffer via chunked write to avoid WebGL GPU stalls.
-      // Direct terminal.write() of large cached buffers (256KB+) can block the main thread
-      // for 5+ seconds while the WebGL renderer processes ReadPixels synchronously.
+      // Instant cache restore for IDLE sessions only.
+      // For busy sessions, the cache is always stale — writing it first causes a
+      // jarring double-render: stale content appears, then the terminal flashes
+      // blank and rewrites with fresh data. Skip the cache and write the fresh
+      // buffer once for a single clean transition.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
-      if (cachedBuffer) {
+      const sessionIsBusy = session && (session.status === 'busy' || session.status === 'working');
+      if (cachedBuffer && !sessionIsBusy) {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
         this.terminal.clear();
         this.terminal.reset();
@@ -2165,6 +2168,11 @@ class CodemanApp {
         if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
         this.terminal.scrollToBottom();
         _crashDiag.log('CACHE_DONE');
+      } else if (sessionIsBusy) {
+        // Clear stale content immediately — fresh buffer is being fetched
+        this.terminal.clear();
+        this.terminal.reset();
+        _crashDiag.log('CACHE_SKIP_BUSY');
       }
 
       _crashDiag.log('FETCH_START');
@@ -2206,9 +2214,9 @@ class CodemanApp {
         this.terminal.reset();
       }
 
-      // Buffer load complete — unblock live SSE writes and flush any queued events.
-      // chunkedTerminalWrite calls _finishBufferLoad internally, but if we skipped
-      // the chunked write (small buffer, cache hit, or empty), we must call it here.
+      // Buffer load complete — unblock live SSE writes (queued events are discarded
+      // to prevent duplicate content). chunkedTerminalWrite calls _finishBufferLoad
+      // internally, but if we skipped the write (cache hit or empty), call it here.
       if (this._isLoadingBuffer) {
         this._finishBufferLoad();
       }

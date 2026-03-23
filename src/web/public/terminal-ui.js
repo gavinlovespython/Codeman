@@ -1109,18 +1109,18 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Complete a buffer load: unblock live SSE writes and flush any queued events.
+   * Complete a buffer load: unblock live SSE writes.
    * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
+   *
+   * Queued SSE events are DISCARDED, not flushed. The loaded buffer from the API
+   * is the source of truth up to the response timestamp. SSE events queued during
+   * the fetch+write overlap with the buffer — flushing them writes duplicate data
+   * (especially Ink cursor-up redraws), corrupting the terminal display.
+   * After unblocking, new SSE/WS events deliver subsequent output normally.
    */
   _finishBufferLoad() {
-    const queue = this._loadBufferQueue;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
-    if (queue && queue.length > 0) {
-      for (const data of queue) {
-        this.batchTerminalWrite(data);
-      }
-    }
   },
 
 
