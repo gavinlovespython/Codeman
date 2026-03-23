@@ -2240,9 +2240,19 @@ class CodemanApp {
         });
       }
 
-      // Fire-and-forget resize — don't await to avoid blocking UI.
-      // The resize triggers an Ink redraw in Claude which streams back via SSE.
-      this.sendResize(sessionId);
+      // Fire-and-forget resize + Ctrl+L to force Ink redraw.
+      // Tailed buffers accumulate stale CUP-positioned Ink frames that overlap
+      // in the viewport (e.g. duplicate "bypass permissions" bars). Ctrl+L
+      // triggers a full Ink redraw which overwrites all stale frame content.
+      // sendResize may be a no-op if dimensions match, so Ctrl+L is essential.
+      this.sendResize(sessionId).then(() => {
+        if (selectGen !== this._selectGeneration) return;
+        fetch(`/api/sessions/${sessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: '\x0c' })
+        }).catch(() => {});
+      });
 
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.
