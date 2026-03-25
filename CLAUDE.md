@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Task | Command |
 |------|---------|
-| Dev server | `npx tsx src/index.ts web` |
+| Dev server | `npm run dev` (or `npx tsx src/index.ts web`) |
 | Type check | `tsc --noEmit` |
 | Lint | `npm run lint` (fix: `npm run lint:fix`) |
 | Format | `npm run format` (check: `npm run format:check`) |
@@ -78,7 +78,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 | Production start | `npm run start` |
 | Production logs | `journalctl --user -u codeman-web -f` |
 
-**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, `format:check` on push to master (Node 22). Tests excluded (they spawn tmux).
+**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, `format:check` on push to master/main and on PRs (Node 22). Tests excluded (they spawn tmux).
 
 **Code style**: Prettier (`singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`). ESLint flat config (`eslint.config.js`) allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. Ignores: `app.js`, `scripts/**/*.mjs`, `src/web/public/vendor/**`, `tools/**`, `remotion/**`.
 

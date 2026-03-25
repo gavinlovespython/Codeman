@@ -366,6 +366,36 @@ describe('system-routes', () => {
       expect(body.success).toBe(false);
     });
 
+    it('saves lastUsedCase as partial update without overwriting other settings', async () => {
+      mockedReadFile.mockResolvedValue(
+        JSON.stringify({ showCost: true, showTokenCount: false, subagentTrackingEnabled: true }) as never
+      );
+
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: '/api/settings',
+        payload: { lastUsedCase: 'my-test-case' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).success).toBe(true);
+
+      const writtenContent = JSON.parse(mockedWriteFile.mock.calls[0][1] as string);
+      expect(writtenContent.lastUsedCase).toBe('my-test-case');
+      expect(writtenContent.showCost).toBe(true);
+      expect(writtenContent.showTokenCount).toBe(false);
+      expect(writtenContent.subagentTrackingEnabled).toBe(true);
+    });
+
+    it('rejects settings with modelConfig (strict schema prevents full-object PUT)', async () => {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: '/api/settings',
+        payload: { lastUsedCase: 'test', modelConfig: { model: 'something' } },
+      });
+      // Fastify rejects unknown fields at schema validation level (400) before handler runs
+      expect(res.statusCode).toBe(400);
+    });
+
     it('rejects non-object body', async () => {
       const res = await harness.app.inject({
         method: 'PUT',
