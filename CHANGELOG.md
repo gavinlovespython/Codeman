@@ -1,5 +1,20 @@
 # aicodeman
 
+## 0.5.3
+
+### Patch Changes
+
+- Readability refactor across 12 core files, extracting ~35 helper methods to reduce duplication:
+  - state-store: extract serializeState(), split assembleStateJson() into focused sub-methods
+  - session: extract \_resetBuffers() (3x dedup), \_clearAllTimers() (10 timer cleanups), \_handleJsonMessage()
+  - ralph-tracker: extract completeAllTodos() (4x dedup), emitValidationWarning(), named similarity constants
+  - subagent-watcher: extract markSubagentAsCompleted(), extractFirstTextContent(), emitToolResult(), findOldestInactiveAgent()
+  - respawn-controller: extract recoveryResetToWatching(), canAutoAccept(), formatRemainingSeconds(), validatePositiveTimeout()
+  - tmux-manager: replace 15 path.includes() with UNSAFE_PATH_CHARS regex, extract buildEnvExports/buildPathExport/\_configureOpenCode helpers
+  - session-auto-ops: extract executeWhenIdle() shared retry helper, convert to options object, add validateThreshold()
+  - app.js: add \_clearTimer() (11 call sites), \_isStaleSelect(), keyboard shortcut lookup table, \_cleanupPreviousSession(), \_resetAllAppState()
+  - route-helpers: add readJsonConfig() (5 inline patterns replaced), validateSessionFilePath() (2 duplicated blocks replaced)
+
 ## 0.5.2
 
 ### Patch Changes
