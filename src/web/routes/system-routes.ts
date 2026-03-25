@@ -24,7 +24,7 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import { findSessionOrFail, formatUptime, parseBody, SETTINGS_PATH } from '../route-helpers.js';
+import { findSessionOrFail, formatUptime, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -393,15 +393,7 @@ export function registerSystemRoutes(
   // ========== Settings ==========
 
   app.get('/api/settings', async () => {
-    try {
-      const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
-      return JSON.parse(content);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to read settings:', err);
-      }
-    }
-    return {};
+    return readJsonConfig(SETTINGS_PATH, 'settings', {});
   });
 
   app.put('/api/settings', async (req) => {
@@ -472,16 +464,8 @@ export function registerSystemRoutes(
   // ========== Model Configuration ==========
 
   app.get('/api/execution/model-config', async () => {
-    try {
-      const content = await fs.readFile(SETTINGS_PATH, 'utf-8');
-      const settings = JSON.parse(content);
-      return { success: true, data: settings.modelConfig || {} };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to read model config:', err);
-      }
-      return { success: true, data: {} };
-    }
+    const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'model config', {});
+    return { success: true, data: settings.modelConfig || {} };
   });
 
   app.put('/api/execution/model-config', async (req) => {
@@ -545,15 +529,7 @@ export function registerSystemRoutes(
   // ========== Subagent Window State Persistence ==========
 
   app.get('/api/subagent-window-states', async () => {
-    try {
-      const content = await fs.readFile(windowStatesPath, 'utf-8');
-      return JSON.parse(content);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to read subagent window states:', err);
-      }
-    }
-    return { minimized: {}, open: [] };
+    return readJsonConfig(windowStatesPath, 'subagent window states', { minimized: {}, open: [] });
   });
 
   app.put('/api/subagent-window-states', async (req) => {
@@ -573,15 +549,7 @@ export function registerSystemRoutes(
   // ========== Subagent Parent Associations ==========
 
   app.get('/api/subagent-parents', async () => {
-    try {
-      const content = await fs.readFile(parentMapPath, 'utf-8');
-      return JSON.parse(content);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to read subagent parent map:', err);
-      }
-    }
-    return {};
+    return readJsonConfig(parentMapPath, 'subagent parent map', {});
   });
 
   app.put('/api/subagent-parents', async (req) => {

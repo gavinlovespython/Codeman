@@ -6,6 +6,8 @@
  */
 
 import { join, resolve, relative, isAbsolute } from 'node:path';
+import { realpathSync } from 'node:fs';
+import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { z } from 'zod';
 import { Session } from '../session.js';
@@ -31,6 +33,45 @@ export function validatePathWithinBase(name: string, baseDir: string): string | 
     return null;
   }
   return fullPath;
+}
+
+/**
+ * Reads and parses a JSON config file, returning a default value on ENOENT.
+ * Logs an error for any I/O failure other than a missing file.
+ */
+export async function readJsonConfig<T>(filePath: string, logLabel: string, defaultValue: T): Promise<T> {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(content) as T;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error(`Failed to read ${logLabel}:`, err);
+    }
+    return defaultValue;
+  }
+}
+
+/**
+ * Validates that a file path (possibly containing symlinks) resolves to a location
+ * within the given session working directory. Returns the resolved and relative paths,
+ * or null if the path escapes the directory or doesn't exist.
+ */
+export function validateSessionFilePath(
+  sessionWorkingDir: string,
+  filePath: string
+): { resolvedPath: string; relativePath: string } | null {
+  const fullPath = resolve(sessionWorkingDir, filePath);
+  let resolvedPath: string;
+  try {
+    resolvedPath = realpathSync(fullPath);
+  } catch {
+    return null;
+  }
+  const relativePath = relative(sessionWorkingDir, resolvedPath);
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    return null;
+  }
+  return { resolvedPath, relativePath };
 }
 
 // Maximum hook data size (prevents oversized SSE broadcasts)

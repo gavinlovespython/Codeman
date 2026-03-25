@@ -359,6 +359,52 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Build the array of environment export commands shared by createSession() and respawnPane().
+   * Includes locale, mux markers, session identity, and API URL.
+   */
+  private buildEnvExports(sessionId: string, muxName: string, mode: SessionMode): string[] {
+    const exports = [
+      'export LANG=en_US.UTF-8',
+      'export LC_ALL=en_US.UTF-8',
+      'unset COLORTERM',
+      'export CODEMAN_MUX=1',
+      `export CODEMAN_SESSION_ID=${sessionId}`,
+      `export CODEMAN_MUX_NAME=${muxName}`,
+      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
+    ];
+    // Only unset CLAUDECODE for Claude sessions
+    if (mode === 'claude') exports.splice(2, 0, 'unset CLAUDECODE');
+    return exports;
+  }
+
+  /**
+   * Resolve the CLI binary directory and return the PATH export prefix string.
+   * Returns '' if no override is needed (shell mode) or the binary dir is not found.
+   * In createSession(), a missing binary dir throws — the caller handles that separately.
+   */
+  private buildPathExport(mode: SessionMode): { pathExport: string; dir: string | null } {
+    if (mode === 'claude') {
+      const dir = findClaudeDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
+    if (mode === 'opencode') {
+      const dir = resolveOpenCodeDir();
+      return { pathExport: dir ? `export PATH="${dir}:$PATH" && ` : '', dir };
+    }
+    return { pathExport: '', dir: null };
+  }
+
+  /**
+   * Configure OpenCode-specific environment on a tmux session.
+   * Sets sensitive API keys and config content via tmux setenv
+   * (not visible in ps output or tmux history, inherited by panes).
+   */
+  private _configureOpenCode(muxName: string, openCodeConfig?: OpenCodeConfig): void {
+    setOpenCodeEnvVars(muxName);
+    setOpenCodeConfigContent(muxName, openCodeConfig);
+  }
+
+  /**
    * Creates a new tmux session wrapping Claude CLI or a shell.
    * In test mode: creates an in-memory session only (no real tmux session).
    */
@@ -402,33 +448,15 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // Resolve CLI binary directory based on mode
-    let pathExport = '';
-    if (mode === 'claude') {
-      const claudeDir = findClaudeDir();
-      if (!claudeDir) {
-        throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
-      }
-      pathExport = `export PATH="${claudeDir}:$PATH" && `;
-    } else if (mode === 'opencode') {
-      const openCodeDir = resolveOpenCodeDir();
-      if (!openCodeDir) {
-        throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
-      }
-      pathExport = `export PATH="${openCodeDir}:$PATH" && `;
+    const { pathExport, dir: cliDir } = this.buildPathExport(mode);
+    if (mode === 'claude' && !cliDir) {
+      throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+    }
+    if (mode === 'opencode' && !cliDir) {
+      throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
     }
 
-    const envExports = [
-      'export LANG=en_US.UTF-8',
-      'export LC_ALL=en_US.UTF-8',
-      'unset COLORTERM',
-      'export CODEMAN_MUX=1',
-      `export CODEMAN_SESSION_ID=${sessionId}`,
-      `export CODEMAN_MUX_NAME=${muxName}`,
-      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
-    ];
-    // Only unset CLAUDECODE for Claude sessions
-    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
-    const envExportsStr = envExports.join(' && ');
+    const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -476,8 +504,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // For OpenCode: set sensitive env vars and config via tmux setenv
       // (not visible in ps output or tmux history, inherited by panes)
       if (mode === 'opencode') {
-        setOpenCodeEnvVars(muxName);
-        setOpenCodeConfigContent(muxName, openCodeConfig);
+        this._configureOpenCode(muxName, openCodeConfig);
       }
 
       // Replace the shell with the actual command (no echo in terminal)
@@ -628,26 +655,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
 
     // Resolve CLI binary directory based on mode
-    let pathExport = '';
-    if (mode === 'claude') {
-      const claudeDir = findClaudeDir();
-      pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
-    } else if (mode === 'opencode') {
-      const openCodeDir = resolveOpenCodeDir();
-      pathExport = openCodeDir ? `export PATH="${openCodeDir}:$PATH" && ` : '';
-    }
+    const { pathExport } = this.buildPathExport(mode);
 
-    const envExports = [
-      'export LANG=en_US.UTF-8',
-      'export LC_ALL=en_US.UTF-8',
-      'unset COLORTERM',
-      'export CODEMAN_MUX=1',
-      `export CODEMAN_SESSION_ID=${sessionId}`,
-      `export CODEMAN_MUX_NAME=${muxName}`,
-      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
-    ];
-    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
-    const envExportsStr = envExports.join(' && ');
+    const envExportsStr = this.buildEnvExports(sessionId, muxName, mode).join(' && ');
 
     const baseCmd = buildSpawnCommand({
       mode,
@@ -665,8 +675,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     try {
       // For OpenCode: set sensitive env vars via tmux setenv before respawn
       if (mode === 'opencode') {
-        setOpenCodeEnvVars(muxName);
-        setOpenCodeConfigContent(muxName, openCodeConfig);
+        this._configureOpenCode(muxName, openCodeConfig);
       }
 
       await execAsync(`tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`, {

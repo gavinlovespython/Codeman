@@ -14,7 +14,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.
 import { CreateCaseSchema, LinkCaseSchema } from '../schemas.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
-import { CASES_DIR, validatePathWithinBase, parseBody } from '../route-helpers.js';
+import { CASES_DIR, validatePathWithinBase, parseBody, readJsonConfig } from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 
@@ -22,15 +22,7 @@ const LINKED_CASES_FILE = join(homedir(), '.codeman', 'linked-cases.json');
 
 /** Read and parse linked-cases.json, returning empty object on missing/invalid file. */
 async function readLinkedCases(): Promise<Record<string, string>> {
-  try {
-    return JSON.parse(await fs.readFile(LINKED_CASES_FILE, 'utf-8'));
-  } catch (err) {
-    // Only warn on real I/O errors, not ENOENT (file missing) or SyntaxError (corrupted JSON)
-    if ((err as NodeJS.ErrnoException).code && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[Server] Failed to read linked cases:', err);
-    }
-    return {};
-  }
+  return readJsonConfig<Record<string, string>>(LINKED_CASES_FILE, 'linked cases', {});
 }
 
 /** Resolve a case name to its directory path, checking linked cases first, then CASES_DIR. */

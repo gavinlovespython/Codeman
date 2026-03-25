@@ -432,6 +432,25 @@ class CodemanApp {
     return this._elemCache[id];
   }
 
+  // Clear a named timeout property: if (this[name]) { clearTimeout(this[name]); this[name] = null; }
+  _clearTimer(timerName) {
+    if (this[timerName]) {
+      clearTimeout(this[timerName]);
+      this[timerName] = null;
+    }
+  }
+
+  // Check if a selectSession generation is stale (a newer tab switch has started).
+  // If stale, cleans up buffer-loading state and returns true.
+  _isStaleSelect(selectGen) {
+    if (selectGen !== this._selectGeneration) {
+      if (this._isLoadingBuffer) this._finishBufferLoad();
+      this._restoringFlushedState = false;
+      return true;
+    }
+    return false;
+  }
+
   // Format token count: 1000k -> 1m, 1450k -> 1.45m, 500 -> 500
   formatTokens(count) {
     if (count >= 1000000) {
@@ -588,73 +607,43 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   setupEventListeners() {
+    // Keyboard shortcut lookup table — data-driven to avoid 12 separate if-blocks.
+    // Each entry: { key, altKey? (alternative key match), ctrl? (require Ctrl/Cmd),
+    //               shift? (require Shift), action }.
+    const SHORTCUTS = [
+      { key: '?', altKey: '/', ctrl: true, action: () => this.showHelp() },
+      { key: 'Enter', ctrl: true, action: () => this.quickStart() },
+      { key: 'w', ctrl: true, action: () => this.killActiveSession() },
+      { key: 'Tab', ctrl: true, action: () => this.nextSession() },
+      { key: 'k', ctrl: true, action: () => this.killAllSessions() },
+      { key: 'l', ctrl: true, action: () => this.clearTerminal() },
+      { key: 'R', ctrl: true, shift: true, action: () => this.restoreTerminalSize() },
+      { key: '=', altKey: '+', ctrl: true, action: () => this.increaseFontSize() },
+      { key: '-', ctrl: true, action: () => this.decreaseFontSize() },
+      { key: 'V', ctrl: true, shift: true, action: () => VoiceInput.toggle() },
+    ];
+
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
       // Don't intercept keys during CJK IME composition
       if (e.isComposing || e.keyCode === 229) return;
 
-      // Escape - close panels and modals
+      // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
         this.closeAllPanels();
         this.closeHelp();
       }
 
-      // Ctrl/Cmd + ? - help
-      if ((e.ctrlKey || e.metaKey) && (e.key === '?' || e.key === '/')) {
-        e.preventDefault();
-        this.showHelp();
-      }
-
-      // Ctrl/Cmd + Enter - quick start
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        this.quickStart();
-      }
-
-      // Ctrl/Cmd + W - close active session
-      if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
-        e.preventDefault();
-        this.killActiveSession();
-      }
-
-      // Ctrl/Cmd + Tab - next session
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
-        e.preventDefault();
-        this.nextSession();
-      }
-
-      // Ctrl/Cmd + K - kill all
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        this.killAllSessions();
-      }
-
-      // Ctrl/Cmd + L - clear terminal
-      if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
-        e.preventDefault();
-        this.clearTerminal();
-      }
-
-      // Ctrl/Cmd + Shift + R - restore terminal size (after mobile squeeze)
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
-        e.preventDefault();
-        this.restoreTerminalSize();
-      }
-
-      // Ctrl/Cmd + +/- - font size
-      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
-        e.preventDefault();
-        this.increaseFontSize();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === '-') {
-        e.preventDefault();
-        this.decreaseFontSize();
-      }
-
-      // Ctrl/Cmd + Shift + V - toggle voice input
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'V') {
-        e.preventDefault();
-        VoiceInput.toggle();
+      // Match against shortcut table
+      for (const s of SHORTCUTS) {
+        const keyMatch = e.key === s.key || (s.altKey && e.key === s.altKey);
+        const ctrlMatch = s.ctrl ? (e.ctrlKey || e.metaKey) : true;
+        const shiftMatch = s.shift ? e.shiftKey : !e.shiftKey;
+        if (keyMatch && ctrlMatch && shiftMatch) {
+          e.preventDefault();
+          s.action();
+          return;
+        }
       }
     }, true); // Use capture phase to handle before terminal
 
@@ -682,10 +671,7 @@ class CodemanApp {
     }
 
     // Clear any pending reconnect timeout to prevent duplicate connections
-    if (this.sseReconnectTimeout) {
-      clearTimeout(this.sseReconnectTimeout);
-      this.sseReconnectTimeout = null;
-    }
+    this._clearTimer('sseReconnectTimeout');
 
     // Clean up existing SSE listeners before creating new connection (prevents listener accumulation)
     if (this._sseListenerCleanup) {
@@ -742,9 +728,7 @@ class CodemanApp {
         this.eventSource = null;
       }
       // Clear any existing reconnect timeout before setting new one (prevents orphaned timeouts)
-      if (this.sseReconnectTimeout) {
-        clearTimeout(this.sseReconnectTimeout);
-      }
+      this._clearTimer('sseReconnectTimeout');
       // Exponential backoff: 200ms, 500ms, 1s, 2s, 4s, ... up to 30s
       // Fast first retry (200ms) for server-restart case (COM deploy),
       // then ramp up for real network issues.
@@ -1168,10 +1152,7 @@ class CodemanApp {
 
   /** Close the active WebSocket connection (if any). */
   _disconnectWs() {
-    if (this._wsReconnectTimer) {
-      clearTimeout(this._wsReconnectTimer);
-      this._wsReconnectTimer = null;
-    }
+    this._clearTimer('_wsReconnectTimer');
     this._wsReconnectAttempts = 0;
     if (this._ws) {
       this._ws.onclose = null; // Prevent re-entrant cleanup
@@ -1317,35 +1298,12 @@ class CodemanApp {
     if (!showCjk) window.cjkActive = false;
   }
 
-  handleInit(data) {
-    // Clear the init fallback timer since we got data
-    if (this._initFallbackTimer) {
-      clearTimeout(this._initFallbackTimer);
-      this._initFallbackTimer = null;
-    }
-    const gen = ++this._initGeneration;
-
-    // CJK input form: controlled by user setting (with server env as override)
-    this._serverCjkOverride = data.inputCjkForm || false;
-    this._updateCjkInputState();
-
-    // Update version displays (header and toolbar)
-    if (data.version) {
-      const versionEl = this.$('versionDisplay');
-      const headerVersionEl = this.$('headerVersion');
-      if (versionEl) {
-        versionEl.textContent = `v${data.version}`;
-        versionEl.title = `Codeman v${data.version}`;
-      }
-      if (headerVersionEl) {
-        headerVersionEl.textContent = `v${data.version}`;
-        headerVersionEl.title = `Codeman v${data.version}`;
-      }
-    }
-
-    // Stop any active voice recording on reconnect
-    VoiceInput.cleanup();
-
+  /**
+   * Reset all app state maps, timers, and handlers to a clean baseline.
+   * Called by handleInit() on SSE reconnect / page reload to prevent
+   * memory leaks and stale data.
+   */
+  _resetAllAppState() {
     this.sessions.clear();
     this.ralphStates.clear();
     this.terminalBuffers.clear();
@@ -1359,17 +1317,11 @@ class CodemanApp {
     }
     this.idleTimers.clear();
     // Clear flicker filter state
-    if (this.flickerFilterTimeout) {
-      clearTimeout(this.flickerFilterTimeout);
-      this.flickerFilterTimeout = null;
-    }
+    this._clearTimer('flickerFilterTimeout');
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
     // Clear pending terminal writes
-    if (this.syncWaitTimeout) {
-      clearTimeout(this.syncWaitTimeout);
-      this.syncWaitTimeout = null;
-    }
+    this._clearTimer('syncWaitTimeout');
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
@@ -1428,6 +1380,36 @@ class CodemanApp {
       clearInterval(this.runSummaryAutoRefreshTimer);
       this.runSummaryAutoRefreshTimer = null;
     }
+  }
+
+  handleInit(data) {
+    // Clear the init fallback timer since we got data
+    this._clearTimer('_initFallbackTimer');
+    const gen = ++this._initGeneration;
+
+    // CJK input form: controlled by user setting (with server env as override)
+    this._serverCjkOverride = data.inputCjkForm || false;
+    this._updateCjkInputState();
+
+    // Update version displays (header and toolbar)
+    if (data.version) {
+      const versionEl = this.$('versionDisplay');
+      const headerVersionEl = this.$('headerVersion');
+      if (versionEl) {
+        versionEl.textContent = `v${data.version}`;
+        versionEl.title = `Codeman v${data.version}`;
+      }
+      if (headerVersionEl) {
+        headerVersionEl.textContent = `v${data.version}`;
+        headerVersionEl.title = `Codeman v${data.version}`;
+      }
+    }
+
+    // Stop any active voice recording on reconnect
+    VoiceInput.cleanup();
+
+    this._resetAllAppState();
+
     data.sessions.forEach(s => {
       this.sessions.set(s.id, s);
       // Load ralph state from session data (only if not explicitly closed by user)
@@ -2001,23 +1983,13 @@ class CodemanApp {
     return this.getShortId(session.id);
   }
 
-  async selectSession(sessionId) {
-    if (this.activeSessionId === sessionId) return;
-    // Focus terminal SYNCHRONOUSLY before any await — iOS Safari only honors
-    // programmatic focus() within the user-gesture call stack (e.g. tab click).
-    // After the first await the gesture context is lost and focus() is silently
-    // ignored, leaving the keyboard unable to send input to the terminal.
-    if (this.terminal) this.terminal.focus();
-
-    const _selStart = performance.now();
-    const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
-    _crashDiag.log(`SELECT: ${_selName}`);
-    console.log(`[CRASH-DIAG] selectSession START: ${sessionId.slice(0,8)}`);
-
-    const selectGen = ++this._selectGeneration;
-
-    if (selectGen !== this._selectGeneration) return; // newer tab switch won
-
+  /**
+   * Clean up state from the previous session before switching tabs.
+   * Handles: WebSocket teardown, CJK clear, flicker filter, tab completion,
+   * terminal write queue, IME composition, and local echo flush.
+   * @param {string} newSessionId - The session being switched TO.
+   */
+  _cleanupPreviousSession(newSessionId) {
     // Close WebSocket for previous session (new one opens after buffer load)
     this._disconnectWs();
 
@@ -2026,10 +1998,7 @@ class CodemanApp {
     if (cjkEl) cjkEl.value = '';
 
     // Clean up flicker filter state when switching sessions
-    if (this.flickerFilterTimeout) {
-      clearTimeout(this.flickerFilterTimeout);
-      this.flickerFilterTimeout = null;
-    }
+    this._clearTimer('flickerFilterTimeout');
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
 
@@ -2037,14 +2006,11 @@ class CodemanApp {
     this._tabCompletionSessionId = null;
     this._tabCompletionRetries = 0;
     this._tabCompletionBaseText = null;
-    if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
-    if (this._clientDropRecoveryTimer) { clearTimeout(this._clientDropRecoveryTimer); this._clientDropRecoveryTimer = null; }
+    this._clearTimer('_tabCompletionFallback');
+    this._clearTimer('_clientDropRecoveryTimer');
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
-    if (this.syncWaitTimeout) {
-      clearTimeout(this.syncWaitTimeout);
-      this.syncWaitTimeout = null;
-    }
+    this._clearTimer('syncWaitTimeout');
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
@@ -2094,9 +2060,29 @@ class CodemanApp {
     // Only sessions with prior flushed text (from tab-switch-away) need detection.
     // After the user's first Enter, clear() resets _bufferDetectDone = false,
     // re-enabling detection for tab completion and other legitimate cases.
-    if (this._localEchoOverlay && !this._flushedOffsets?.has(sessionId)) {
+    if (this._localEchoOverlay && !this._flushedOffsets?.has(newSessionId)) {
       this._localEchoOverlay.suppressBufferDetection();
     }
+  }
+
+  async selectSession(sessionId) {
+    if (this.activeSessionId === sessionId) return;
+    // Focus terminal SYNCHRONOUSLY before any await — iOS Safari only honors
+    // programmatic focus() within the user-gesture call stack (e.g. tab click).
+    // After the first await the gesture context is lost and focus() is silently
+    // ignored, leaving the keyboard unable to send input to the terminal.
+    if (this.terminal) this.terminal.focus();
+
+    const _selStart = performance.now();
+    const _selName = this.sessions.get(sessionId)?.name || sessionId.slice(0,8);
+    _crashDiag.log(`SELECT: ${_selName}`);
+    console.log(`[CRASH-DIAG] selectSession START: ${sessionId.slice(0,8)}`);
+
+    const selectGen = ++this._selectGeneration;
+
+    if (selectGen !== this._selectGeneration) return; // newer tab switch won
+
+    this._cleanupPreviousSession(sessionId);
     this.activeSessionId = sessionId;
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
@@ -2186,7 +2172,7 @@ class CodemanApp {
         this.terminal.clear();
         this.terminal.reset();
         await this.chunkedTerminalWrite(cachedBuffer);
-        if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+        if (this._isStaleSelect(selectGen)) return;
         this.terminal.scrollToBottom();
         _crashDiag.log('CACHE_DONE');
       } else if (sessionIsBusy) {
@@ -2198,7 +2184,7 @@ class CodemanApp {
 
       _crashDiag.log('FETCH_START');
       const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-      if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+      if (this._isStaleSelect(selectGen)) return;
       const data = await res.json();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
@@ -2217,7 +2203,7 @@ class CodemanApp {
           }
           // Use chunked write for large buffers to avoid UI jank
           await this.chunkedTerminalWrite(data.terminalBuffer);
-          if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
+          if (this._isStaleSelect(selectGen)) return;
           // Ensure terminal is scrolled to bottom after buffer load
           this.terminal.scrollToBottom();
         }
@@ -2624,9 +2610,7 @@ class CodemanApp {
   updateTokens() {
     // Debounce at 200ms — token display is non-critical and shouldn't
     // compete with input handling on the main thread
-    if (this._updateTokensTimeout) {
-      clearTimeout(this._updateTokensTimeout);
-    }
+    this._clearTimer('_updateTokensTimeout');
     this._updateTokensTimeout = setTimeout(() => {
       this._updateTokensTimeout = null;
       this._updateTokensImmediate();

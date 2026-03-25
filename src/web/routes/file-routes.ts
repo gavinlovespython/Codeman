@@ -4,12 +4,11 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { join, resolve, relative, isAbsolute } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { join } from 'node:path';
 import fs from 'node:fs/promises';
 import { ApiErrorCode, createErrorResponse, getErrorMessage } from '../../types.js';
 import { fileStreamManager } from '../../file-stream-manager.js';
-import { findSessionOrFail } from '../route-helpers.js';
+import { findSessionOrFail, validateSessionFilePath } from '../route-helpers.js';
 import type { SessionPort } from '../ports/index.js';
 
 export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void {
@@ -148,17 +147,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     }
 
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const fullPath = resolve(session.workingDir, filePath);
-    let resolvedPath: string;
-    try {
-      resolvedPath = realpathSync(fullPath);
-    } catch {
+    const validated = validateSessionFilePath(session.workingDir, filePath);
+    if (!validated) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
     }
-    const relativePath = relative(session.workingDir, resolvedPath);
-    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory');
-    }
+    const { resolvedPath } = validated;
 
     try {
       const stat = await fs.stat(resolvedPath);
@@ -255,19 +248,12 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort): void
     }
 
     // Validate path is within working directory (security: resolve symlinks to prevent traversal)
-    const fullPath = resolve(session.workingDir, filePath);
-    let resolvedPath: string;
-    try {
-      resolvedPath = realpathSync(fullPath);
-    } catch {
+    const validated = validateSessionFilePath(session.workingDir, filePath);
+    if (!validated) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
       return;
     }
-    const relativePath = relative(session.workingDir, resolvedPath);
-    if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-      reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Path must be within working directory'));
-      return;
-    }
+    const { resolvedPath } = validated;
 
     try {
       // Validate file size before reading (DoS protection - prevent memory exhaustion)
