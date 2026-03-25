@@ -109,16 +109,10 @@ Object.assign(CodemanApp.prototype, {
 
   async saveLastUsedCase(caseName) {
     try {
-      // Get current settings
-      const res = await fetch('/api/settings');
-      const settings = res.ok ? await res.json() : {};
-      // Update lastUsedCase
-      settings.lastUsedCase = caseName;
-      // Save back
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        body: JSON.stringify({ lastUsedCase: caseName })
       });
     } catch (err) {
       console.error('Failed to save last used case:', err);
