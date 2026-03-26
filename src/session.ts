@@ -871,6 +871,71 @@ export class Session extends EventEmitter {
    * session.write('help me with this code\r');
    * ```
    */
+  private async _setupOrAttachMuxSession(options: {
+    respawnPaneOptions: import('./mux-interface.js').RespawnPaneOptions;
+    createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
+    spawnErrLabel: string;
+  }): Promise<{ isRestored: boolean }> {
+    const mux = this._mux!;
+
+    // Verify stale mux session — tmux may have been destroyed (e.g., killed externally)
+    if (this._muxSession && !mux.muxSessionExists(this._muxSession.muxName)) {
+      console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
+      this._muxSession = null;
+    }
+
+    // Check if session exists but pane is dead (remain-on-exit keeps it alive)
+    // Respawn the pane instead of creating a whole new session — preserves tmux scrollback
+    let needsNewSession = false;
+    if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
+      console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
+      const newPid = await mux.respawnPane(options.respawnPaneOptions);
+      if (!newPid) {
+        console.error('[Session] Failed to respawn pane, will create new session');
+        needsNewSession = true;
+      } else {
+        // Wait a moment for the respawned process to fully start
+        await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
+      }
+    }
+
+    // Check if we already have a mux session (restored session)
+    const isRestored = this._muxSession !== null && !needsNewSession;
+    if (isRestored) {
+      console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
+    } else {
+      // Create a new mux session
+      this._muxSession = await mux.createSession(options.createSessionOptions);
+      console.log('[Session] Created mux session:', this._muxSession.muxName);
+      // No extra sleep — createSession() already waits for tmux readiness
+    }
+
+    // Attach to the mux session via PTY
+    try {
+      this.ptyProcess = pty.spawn(mux.getAttachCommand(), mux.getAttachArgs(this._muxSession!.muxName), {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 40,
+        cwd: this.workingDir,
+        env: buildMuxAttachEnv(),
+      });
+    } catch (spawnErr) {
+      console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
+      this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
+      throw spawnErr;
+    }
+
+    return { isRestored };
+  }
+
+  private _handleTerminalOutput(data: string): void {
+    // BufferAccumulator handles auto-trimming when max size exceeded
+    this._terminalBuffer.append(data);
+    this._lastActivityAt = Date.now();
+    this.emit('terminal', data);
+    this.emit('output', data);
+  }
+
   async startInteractive(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
@@ -886,18 +951,8 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
-        // Verify stale mux session — tmux may have been destroyed (e.g., killed externally)
-        if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
-          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
-          this._muxSession = null;
-        }
-
-        // Check if session exists but pane is dead (remain-on-exit keeps it alive)
-        // Respawn the pane instead of creating a whole new session — preserves tmux scrollback
-        let needsNewSession = false;
-        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
-          console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-          const newPid = await this._mux.respawnPane({
+        const { isRestored } = await this._setupOrAttachMuxSession({
+          respawnPaneOptions: {
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: this.mode,
@@ -907,23 +962,8 @@ export class Session extends EventEmitter {
             allowedTools: this._allowedTools,
             openCodeConfig: this._openCodeConfig,
             resumeSessionId: this._resumeSessionId,
-          });
-          if (!newPid) {
-            console.error('[Session] Failed to respawn pane, will create new session');
-            needsNewSession = true;
-          } else {
-            // Wait a moment for the respawned process to fully start
-            await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
-          }
-        }
-
-        // Check if we already have a mux session (restored session)
-        const isRestoredSession = this._muxSession !== null && !needsNewSession;
-        if (isRestoredSession) {
-          console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
-        } else {
-          // Create a new mux session
-          this._muxSession = await this._mux.createSession({
+          },
+          createSessionOptions: {
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: this.mode,
@@ -934,36 +974,16 @@ export class Session extends EventEmitter {
             allowedTools: this._allowedTools,
             openCodeConfig: this._openCodeConfig,
             resumeSessionId: this._resumeSessionId,
-          });
-          console.log('[Session] Created mux session:', this._muxSession.muxName);
-          // No extra sleep — createSession() already waits for tmux readiness
-        }
+          },
+          spawnErrLabel: 'mux attachment',
+        });
 
-        // Attach to the mux session via PTY
-        try {
-          this.ptyProcess = pty.spawn(
-            this._mux.getAttachCommand(),
-            this._mux.getAttachArgs(this._muxSession!.muxName),
-            {
-              name: 'xterm-256color',
-              cols: 120,
-              rows: 40,
-              cwd: this.workingDir,
-              env: buildMuxAttachEnv(),
-            }
-          );
-
-          // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
-          this._claudeSessionId = this._resumeSessionId || this.id;
-        } catch (spawnErr) {
-          console.error('[Session] Failed to spawn PTY for mux attachment:', spawnErr);
-          this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
-          throw spawnErr;
-        }
+        // Set claudeSessionId — when resuming, the Claude conversation ID is the resumed one.
+        this._claudeSessionId = this._resumeSessionId || this.id;
 
         // For NEW mux sessions: wait for readiness then clean buffer
         // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
-        if (!isRestoredSession) {
+        if (!isRestored) {
           if (this.mode === 'opencode') {
             // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
             // Wait for TUI to stabilize (output stops changing), then mark ready.
@@ -1050,12 +1070,7 @@ export class Session extends EventEmitter {
       const data = rawData.replace(FOCUS_ESCAPE_FILTER, '').replace(CTRL_L_PATTERN, ''); // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
 
-      // BufferAccumulator handles auto-trimming when max size exceeded
-      this._terminalBuffer.append(data);
-      this._lastActivityAt = Date.now();
-
-      this.emit('terminal', data);
-      this.emit('output', data);
+      this._handleTerminalOutput(data);
 
       // === Idle/working detection runs on every chunk (latency-sensitive) ===
       // Detect if Claude is working or at prompt
@@ -1263,69 +1278,26 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
-        // Verify stale mux session — tmux may have been destroyed externally
-        if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
-          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
-          this._muxSession = null;
-        }
-
-        // Check if session exists but pane is dead (remain-on-exit keeps it alive)
-        let needsNewSession = false;
-        if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
-          console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-          const newPid = await this._mux.respawnPane({
+        const { isRestored } = await this._setupOrAttachMuxSession({
+          respawnPaneOptions: {
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: 'shell',
             niceConfig: this._niceConfig,
-          });
-          if (!newPid) {
-            console.error('[Session] Failed to respawn pane, will create new session');
-            needsNewSession = true;
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
-          }
-        }
-
-        // Check if we already have a mux session (restored session)
-        const isRestoredSession = this._muxSession !== null && !needsNewSession;
-        if (isRestoredSession) {
-          console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
-        } else {
-          // Create a new mux session
-          this._muxSession = await this._mux.createSession({
+          },
+          createSessionOptions: {
             sessionId: this.id,
             workingDir: this.workingDir,
             mode: 'shell',
             name: this._name,
             niceConfig: this._niceConfig,
-          });
-          console.log('[Session] Created mux session:', this._muxSession.muxName);
-          // No extra sleep — createSession() already waits for tmux readiness
-        }
-
-        // Attach to the mux session via PTY
-        try {
-          this.ptyProcess = pty.spawn(
-            this._mux.getAttachCommand(),
-            this._mux.getAttachArgs(this._muxSession!.muxName),
-            {
-              name: 'xterm-256color',
-              cols: 120,
-              rows: 40,
-              cwd: this.workingDir,
-              env: buildMuxAttachEnv(),
-            }
-          );
-        } catch (spawnErr) {
-          console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);
-          this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
-          throw spawnErr;
-        }
+          },
+          spawnErrLabel: 'shell mux attachment',
+        });
 
         // For NEW sessions: clear by sending 'clear' command to the shell
         // For RESTORED sessions: don't clear - we want to see the existing output
-        if (!isRestoredSession) {
+        if (!isRestored) {
           setTimeout(() => {
             if (this.ptyProcess) {
               this._terminalBuffer.clear();
@@ -1366,12 +1338,7 @@ export class Session extends EventEmitter {
       const data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
       if (!data) return; // Skip if only focus sequences
 
-      // BufferAccumulator handles auto-trimming when max size exceeded
-      this._terminalBuffer.append(data);
-      this._lastActivityAt = Date.now();
-
-      this.emit('terminal', data);
-      this.emit('output', data);
+      this._handleTerminalOutput(data);
     });
 
     this.ptyProcess.onExit(({ exitCode }) => {
@@ -1479,12 +1446,7 @@ export class Session extends EventEmitter {
           const data = rawData.replace(FOCUS_ESCAPE_FILTER, '');
           if (!data) return; // Skip if only focus sequences
 
-          // BufferAccumulator handles auto-trimming when max size exceeded
-          this._terminalBuffer.append(data);
-          this._lastActivityAt = Date.now();
-
-          this.emit('terminal', data);
-          this.emit('output', data);
+          this._handleTerminalOutput(data);
 
           // Also try to parse JSON lines for structured data
           this.processOutput(data);

@@ -939,15 +939,7 @@ class CodemanApp {
     if (data.id === this.activeSessionId) {
       this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
     }
-    const session = this.sessions.get(data.id);
-    this.notificationManager?.notify({
-      urgency: 'critical',
-      category: 'session-error',
-      sessionId: data.id,
-      sessionName: session?.name || this.getShortId(data.id),
-      title: 'Session Error',
-      message: data.error || 'Unknown error',
-    });
+    this._notifySession(data.id, 'critical', 'session-error', 'Session Error', data.error || 'Unknown error');
   }
 
   _onSessionExit(data) {
@@ -960,14 +952,7 @@ class CodemanApp {
     }
     // Notify on unexpected exit (non-zero code)
     if (data.code && data.code !== 0) {
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'session-crash',
-        sessionId: data.id,
-        sessionName: session?.name || this.getShortId(data.id),
-        title: 'Session Crashed',
-        message: `Exited with code ${data.code}`,
-      });
+      this._notifySession(data.id, 'critical', 'session-crash', 'Session Crashed', `Exited with code ${data.code}`);
     }
   }
 
@@ -984,15 +969,7 @@ class CodemanApp {
       const threshold = this.notificationManager?.preferences?.stuckThresholdMs || 600000;
       clearTimeout(this.idleTimers.get(data.id));
       this.idleTimers.set(data.id, setTimeout(() => {
-        const s = this.sessions.get(data.id);
-        this.notificationManager?.notify({
-          urgency: 'warning',
-          category: 'session-stuck',
-          sessionId: data.id,
-          sessionName: s?.name || this.getShortId(data.id),
-          title: 'Session Idle',
-          message: `Idle for ${Math.round(threshold / 60000)}+ minutes`,
-        });
+        this._notifySession(data.id, 'warning', 'session-stuck', 'Session Idle', `Idle for ${Math.round(threshold / 60000)}+ minutes`);
         this.idleTimers.delete(data.id);
       }, threshold));
     }
@@ -1023,15 +1000,7 @@ class CodemanApp {
       this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
       this.updateRespawnTokens(0);
     }
-    const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'auto-clear',
-      sessionId: data.sessionId,
-      sessionName: session?.name || this.getShortId(data.sessionId),
-      title: 'Auto-Cleared',
-      message: `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`,
-    });
+    this._notifySession(data.sessionId, 'info', 'auto-clear', 'Auto-Cleared', `Context reset at ${(data.tokens || 0).toLocaleString()} tokens`);
   }
 
   _onSessionCliInfo(data) {
@@ -1981,6 +1950,18 @@ class CodemanApp {
       return session.workingDir.split('/').pop() || session.workingDir;
     }
     return this.getShortId(session.id);
+  }
+
+  _notifySession(sessionId, urgency, category, title, message) {
+    const session = this.sessions.get(sessionId);
+    this.notificationManager?.notify({
+      urgency,
+      category,
+      sessionId,
+      sessionName: session?.name || this.getShortId(sessionId),
+      title,
+      message,
+    });
   }
 
   /**

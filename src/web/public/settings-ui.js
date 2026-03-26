@@ -14,92 +14,46 @@
 Object.assign(CodemanApp.prototype, {
   // Hooks (Claude Code hook events)
   _onHookIdlePrompt(data) {
-    const session = this.sessions.get(data.sessionId);
     // Always track pending hook - alert will show when switching away from session
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'idle_prompt');
     }
-    this.notificationManager?.notify({
-      urgency: 'warning',
-      category: 'hook-idle',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Waiting for Input',
-      message: data.message || 'Claude is idle and waiting for a prompt',
-    });
+    this._notifySession(data.sessionId, 'warning', 'hook-idle', 'Waiting for Input', data.message || 'Claude is idle and waiting for a prompt');
   },
 
   _onHookPermissionPrompt(data) {
-    const session = this.sessions.get(data.sessionId);
     // Always track pending hook - action alerts need user interaction to clear
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'permission_prompt');
     }
     const toolInfo = data.tool ? `${data.tool}${data.command ? ': ' + data.command : data.file ? ': ' + data.file : ''}` : '';
-    this.notificationManager?.notify({
-      urgency: 'critical',
-      category: 'hook-permission',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Permission Required',
-      message: toolInfo || 'Claude needs tool approval to continue',
-    });
+    this._notifySession(data.sessionId, 'critical', 'hook-permission', 'Permission Required', toolInfo || 'Claude needs tool approval to continue');
   },
 
   _onHookElicitationDialog(data) {
-    const session = this.sessions.get(data.sessionId);
     // Always track pending hook - action alerts need user interaction to clear
     if (data.sessionId) {
       this.setPendingHook(data.sessionId, 'elicitation_dialog');
     }
-    this.notificationManager?.notify({
-      urgency: 'critical',
-      category: 'hook-elicitation',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Question Asked',
-      message: data.question || 'Claude is asking a question and waiting for your answer',
-    });
+    this._notifySession(data.sessionId, 'critical', 'hook-elicitation', 'Question Asked', data.question || 'Claude is asking a question and waiting for your answer');
   },
 
   _onHookStop(data) {
-    const session = this.sessions.get(data.sessionId);
     // Clear all pending hooks when Claude finishes responding
     if (data.sessionId) {
       this.clearPendingHooks(data.sessionId);
     }
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'hook-stop',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Response Complete',
-      message: data.reason || 'Claude has finished responding',
-    });
+    this._notifySession(data.sessionId, 'info', 'hook-stop', 'Response Complete', data.reason || 'Claude has finished responding');
   },
 
   _onHookTeammateIdle(data) {
     const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'warning',
-      category: 'hook-teammate-idle',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Teammate Idle',
-      message: `A teammate is idle in ${session?.name || data.sessionId}`,
-    });
+    this._notifySession(data.sessionId, 'warning', 'hook-teammate-idle', 'Teammate Idle', `A teammate is idle in ${session?.name || data.sessionId}`);
   },
 
   _onHookTaskCompleted(data) {
     const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'hook-task-completed',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Task Completed',
-      message: `A team task completed in ${session?.name || data.sessionId}`,
-    });
+    this._notifySession(data.sessionId, 'info', 'hook-task-completed', 'Task Completed', `A team task completed in ${session?.name || data.sessionId}`);
   },
 
 
@@ -517,16 +471,17 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _updateTunnelUrlDisplay(url) {
-    const row = document.getElementById('tunnelUrlRow');
-    const display = document.getElementById('tunnelUrlDisplay');
+  _updateTunnelUrlRow(rowId, displayId, url, suffix = '') {
+    const row = document.getElementById(rowId);
+    const display = document.getElementById(displayId);
     if (!row || !display) return;
     if (url) {
+      const fullUrl = url + suffix;
       row.style.display = '';
-      display.textContent = url;
+      display.textContent = fullUrl;
       display.onclick = () => {
-        navigator.clipboard.writeText(url).then(() => {
-          this.showToast('Tunnel URL copied', 'success');
+        navigator.clipboard.writeText(fullUrl).then(() => {
+          this.showToast(`${suffix ? 'Upload' : 'Tunnel'} URL copied`, 'success');
         });
       };
     } else {
@@ -534,24 +489,11 @@ Object.assign(CodemanApp.prototype, {
       display.textContent = '';
       display.onclick = null;
     }
-    // Upload URL row
-    const uploadRow = document.getElementById('tunnelUploadUrlRow');
-    const uploadDisplay = document.getElementById('tunnelUploadUrlDisplay');
-    if (!uploadRow || !uploadDisplay) return;
-    if (url) {
-      const uploadUrl = url + '/upload.html';
-      uploadRow.style.display = '';
-      uploadDisplay.textContent = uploadUrl;
-      uploadDisplay.onclick = () => {
-        navigator.clipboard.writeText(uploadUrl).then(() => {
-          this.showToast('Upload URL copied', 'success');
-        });
-      };
-    } else {
-      uploadRow.style.display = 'none';
-      uploadDisplay.textContent = '';
-      uploadDisplay.onclick = null;
-    }
+  },
+
+  _updateTunnelUrlDisplay(url) {
+    this._updateTunnelUrlRow('tunnelUrlRow', 'tunnelUrlDisplay', url);
+    this._updateTunnelUrlRow('tunnelUploadUrlRow', 'tunnelUploadUrlDisplay', url, '/upload.html');
   },
 
   showTunnelQR() {

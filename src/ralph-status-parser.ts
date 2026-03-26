@@ -91,6 +91,67 @@ const COMPLETION_INDICATOR_PATTERNS = [
   /project\s+(?:is\s+)?(?:completed?|done|finished)/i,
 ];
 
+interface FieldParser<T> {
+  pattern: RegExp;
+  field: keyof RalphStatusBlock;
+  validate: (value: string) => boolean;
+  transform: (value: string) => T;
+  errorMsg: (value: string) => string;
+}
+
+const FIELD_PARSERS: FieldParser<RalphStatusValue | RalphTestsStatus | RalphWorkType | number | boolean | string>[] = [
+  {
+    pattern: RALPH_STATUS_FIELD_PATTERN,
+    field: 'status',
+    validate: (v) => ['IN_PROGRESS', 'COMPLETE', 'BLOCKED'].includes(v.toUpperCase()),
+    transform: (v) => v.toUpperCase() as RalphStatusValue,
+    errorMsg: (v) => `Invalid STATUS value: "${v}". Expected: IN_PROGRESS, COMPLETE, or BLOCKED`,
+  },
+  {
+    pattern: RALPH_TASKS_COMPLETED_PATTERN,
+    field: 'tasksCompletedThisLoop',
+    validate: (v) => !Number.isNaN(parseInt(v, 10)) && parseInt(v, 10) >= 0,
+    transform: (v) => parseInt(v, 10),
+    errorMsg: (v) => `Invalid TASKS_COMPLETED_THIS_LOOP value: "${v}". Expected: non-negative integer`,
+  },
+  {
+    pattern: RALPH_FILES_MODIFIED_PATTERN,
+    field: 'filesModified',
+    validate: (v) => !Number.isNaN(parseInt(v, 10)) && parseInt(v, 10) >= 0,
+    transform: (v) => parseInt(v, 10),
+    errorMsg: (v) => `Invalid FILES_MODIFIED value: "${v}". Expected: non-negative integer`,
+  },
+  {
+    pattern: RALPH_TESTS_STATUS_PATTERN,
+    field: 'testsStatus',
+    validate: (v) => ['PASSING', 'FAILING', 'NOT_RUN'].includes(v.toUpperCase()),
+    transform: (v) => v.toUpperCase() as RalphTestsStatus,
+    errorMsg: (v) => `Invalid TESTS_STATUS value: "${v}". Expected: PASSING, FAILING, or NOT_RUN`,
+  },
+  {
+    pattern: RALPH_WORK_TYPE_PATTERN,
+    field: 'workType',
+    validate: (v) => ['IMPLEMENTATION', 'TESTING', 'DOCUMENTATION', 'REFACTORING'].includes(v.toUpperCase()),
+    transform: (v) => v.toUpperCase() as RalphWorkType,
+    errorMsg: (v) =>
+      `Invalid WORK_TYPE value: "${v}". Expected: IMPLEMENTATION, TESTING, DOCUMENTATION, or REFACTORING`,
+  },
+  {
+    pattern: RALPH_EXIT_SIGNAL_PATTERN,
+    field: 'exitSignal',
+    validate: () => true,
+    transform: (v) => v.toLowerCase() === 'true',
+    errorMsg: () => '',
+  },
+  {
+    pattern: RALPH_RECOMMENDATION_PATTERN,
+    field: 'recommendation',
+    validate: () => true,
+    transform: (v) => v.trim(),
+    errorMsg: () => '',
+  },
+];
+
 /**
  * RalphStatusParser - Parses RALPH_STATUS blocks and manages circuit breaker.
  *
@@ -303,85 +364,21 @@ export class RalphStatusParser extends EventEmitter {
       const trimmedLine = line.trim();
       if (!trimmedLine) continue;
 
-      // Track whether this line matched any known field
       let matched = false;
 
-      // STATUS field (required)
-      const statusMatch = trimmedLine.match(RALPH_STATUS_FIELD_PATTERN);
-      if (statusMatch) {
-        const value = statusMatch[1].toUpperCase();
-        if (['IN_PROGRESS', 'COMPLETE', 'BLOCKED'].includes(value)) {
-          block.status = value as RalphStatusValue;
-        } else {
-          parseErrors.push(`Invalid STATUS value: "${value}". Expected: IN_PROGRESS, COMPLETE, or BLOCKED`);
+      for (const parser of FIELD_PARSERS) {
+        const match = trimmedLine.match(parser.pattern);
+        if (match) {
+          const rawValue = match[1];
+          if (parser.validate(rawValue)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (block as any)[parser.field] = parser.transform(rawValue);
+          } else {
+            parseErrors.push(parser.errorMsg(rawValue));
+          }
+          matched = true;
+          break;
         }
-        matched = true;
-      }
-
-      // TASKS_COMPLETED_THIS_LOOP field
-      const tasksMatch = trimmedLine.match(RALPH_TASKS_COMPLETED_PATTERN);
-      if (tasksMatch) {
-        const value = parseInt(tasksMatch[1], 10);
-        if (!Number.isNaN(value) && value >= 0) {
-          block.tasksCompletedThisLoop = value;
-        } else {
-          parseErrors.push(
-            `Invalid TASKS_COMPLETED_THIS_LOOP value: "${tasksMatch[1]}". Expected: non-negative integer`
-          );
-        }
-        matched = true;
-      }
-
-      // FILES_MODIFIED field
-      const filesMatch = trimmedLine.match(RALPH_FILES_MODIFIED_PATTERN);
-      if (filesMatch) {
-        const value = parseInt(filesMatch[1], 10);
-        if (!Number.isNaN(value) && value >= 0) {
-          block.filesModified = value;
-        } else {
-          parseErrors.push(`Invalid FILES_MODIFIED value: "${filesMatch[1]}". Expected: non-negative integer`);
-        }
-        matched = true;
-      }
-
-      // TESTS_STATUS field
-      const testsMatch = trimmedLine.match(RALPH_TESTS_STATUS_PATTERN);
-      if (testsMatch) {
-        const value = testsMatch[1].toUpperCase();
-        if (['PASSING', 'FAILING', 'NOT_RUN'].includes(value)) {
-          block.testsStatus = value as RalphTestsStatus;
-        } else {
-          parseErrors.push(`Invalid TESTS_STATUS value: "${value}". Expected: PASSING, FAILING, or NOT_RUN`);
-        }
-        matched = true;
-      }
-
-      // WORK_TYPE field
-      const workMatch = trimmedLine.match(RALPH_WORK_TYPE_PATTERN);
-      if (workMatch) {
-        const value = workMatch[1].toUpperCase();
-        if (['IMPLEMENTATION', 'TESTING', 'DOCUMENTATION', 'REFACTORING'].includes(value)) {
-          block.workType = value as RalphWorkType;
-        } else {
-          parseErrors.push(
-            `Invalid WORK_TYPE value: "${value}". Expected: IMPLEMENTATION, TESTING, DOCUMENTATION, or REFACTORING`
-          );
-        }
-        matched = true;
-      }
-
-      // EXIT_SIGNAL field
-      const exitMatch = trimmedLine.match(RALPH_EXIT_SIGNAL_PATTERN);
-      if (exitMatch) {
-        block.exitSignal = exitMatch[1].toLowerCase() === 'true';
-        matched = true;
-      }
-
-      // RECOMMENDATION field
-      const recMatch = trimmedLine.match(RALPH_RECOMMENDATION_PATTERN);
-      if (recMatch) {
-        block.recommendation = recMatch[1].trim();
-        matched = true;
       }
 
       // Track unknown fields for debugging (only if looks like a field)
@@ -475,38 +472,9 @@ export class RalphStatusParser extends EventEmitter {
     const prevState = this._circuitBreaker.state;
 
     if (hasProgress) {
-      // Progress detected - reset counters, possibly close circuit
-      this._circuitBreaker.consecutiveNoProgress = 0;
-      this._circuitBreaker.consecutiveSameError = 0;
-      this._circuitBreaker.lastProgressIteration = this._cycleCount;
-
-      if (this._circuitBreaker.state === 'HALF_OPEN') {
-        this._circuitBreaker.state = 'CLOSED';
-        this._circuitBreaker.reason = 'Progress detected, circuit closed';
-        this._circuitBreaker.reasonCode = 'progress_detected';
-      }
+      this._handleProgressDetected();
     } else {
-      // No progress
-      this._circuitBreaker.consecutiveNoProgress++;
-
-      // State transitions based on consecutive no-progress
-      if (this._circuitBreaker.state === 'CLOSED') {
-        if (this._circuitBreaker.consecutiveNoProgress >= 3) {
-          this._circuitBreaker.state = 'OPEN';
-          this._circuitBreaker.reason = `No progress for ${this._circuitBreaker.consecutiveNoProgress} iterations`;
-          this._circuitBreaker.reasonCode = 'no_progress_open';
-        } else if (this._circuitBreaker.consecutiveNoProgress >= 2) {
-          this._circuitBreaker.state = 'HALF_OPEN';
-          this._circuitBreaker.reason = 'Warning: no progress detected';
-          this._circuitBreaker.reasonCode = 'no_progress_warning';
-        }
-      } else if (this._circuitBreaker.state === 'HALF_OPEN') {
-        if (this._circuitBreaker.consecutiveNoProgress >= 3) {
-          this._circuitBreaker.state = 'OPEN';
-          this._circuitBreaker.reason = `No progress for ${this._circuitBreaker.consecutiveNoProgress} iterations`;
-          this._circuitBreaker.reasonCode = 'no_progress_open';
-        }
-      }
+      this._handleNoProgress();
     }
 
     // Track tests failure
@@ -532,6 +500,40 @@ export class RalphStatusParser extends EventEmitter {
     if (prevState !== this._circuitBreaker.state) {
       this._circuitBreaker.lastTransitionAt = Date.now();
       this.emit('circuitBreakerUpdate', { ...this._circuitBreaker });
+    }
+  }
+
+  private _handleProgressDetected(): void {
+    this._circuitBreaker.consecutiveNoProgress = 0;
+    this._circuitBreaker.consecutiveSameError = 0;
+    this._circuitBreaker.lastProgressIteration = this._cycleCount;
+
+    if (this._circuitBreaker.state === 'HALF_OPEN') {
+      this._circuitBreaker.state = 'CLOSED';
+      this._circuitBreaker.reason = 'Progress detected, circuit closed';
+      this._circuitBreaker.reasonCode = 'progress_detected';
+    }
+  }
+
+  private _handleNoProgress(): void {
+    this._circuitBreaker.consecutiveNoProgress++;
+
+    if (this._circuitBreaker.state === 'CLOSED') {
+      if (this._circuitBreaker.consecutiveNoProgress >= 3) {
+        this._circuitBreaker.state = 'OPEN';
+        this._circuitBreaker.reason = `No progress for ${this._circuitBreaker.consecutiveNoProgress} iterations`;
+        this._circuitBreaker.reasonCode = 'no_progress_open';
+      } else if (this._circuitBreaker.consecutiveNoProgress >= 2) {
+        this._circuitBreaker.state = 'HALF_OPEN';
+        this._circuitBreaker.reason = 'Warning: no progress detected';
+        this._circuitBreaker.reasonCode = 'no_progress_warning';
+      }
+    } else if (this._circuitBreaker.state === 'HALF_OPEN') {
+      if (this._circuitBreaker.consecutiveNoProgress >= 3) {
+        this._circuitBreaker.state = 'OPEN';
+        this._circuitBreaker.reason = `No progress for ${this._circuitBreaker.consecutiveNoProgress} iterations`;
+        this._circuitBreaker.reasonCode = 'no_progress_open';
+      }
     }
   }
 

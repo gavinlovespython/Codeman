@@ -116,6 +116,26 @@ export class StateStore {
     this.loadRalphStates();
   }
 
+  private _mergeWithInitialState(parsed: Partial<AppState>): AppState {
+    const initial = createInitialState();
+    return {
+      ...initial,
+      ...parsed,
+      sessions: { ...parsed.sessions },
+      tasks: { ...parsed.tasks },
+      ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
+      config: { ...initial.config, ...parsed.config },
+    };
+  }
+
+  private _resetCircuitBreaker(): void {
+    this.consecutiveSaveFailures = 0;
+    if (this.circuitBreakerOpen) {
+      console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
+      this.circuitBreakerOpen = false;
+    }
+  }
+
   private ensureDir(): void {
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) {
@@ -132,15 +152,7 @@ export class StateStore {
         if (existsSync(path)) {
           const data = readFileSync(path, 'utf-8');
           const parsed = JSON.parse(data) as Partial<AppState>;
-          const initial = createInitialState();
-          const result = {
-            ...initial,
-            ...parsed,
-            sessions: { ...parsed.sessions },
-            tasks: { ...parsed.tasks },
-            ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
-            config: { ...initial.config, ...parsed.config },
-          };
+          const result = this._mergeWithInitialState(parsed);
           if (path !== this.filePath) {
             console.warn(`[StateStore] Recovered state from backup: ${path}`);
           }
@@ -321,11 +333,7 @@ export class StateStore {
       await writeFile(tempPath, json, 'utf-8');
       await rename(tempPath, this.filePath);
 
-      this.consecutiveSaveFailures = 0;
-      if (this.circuitBreakerOpen) {
-        console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
-        this.circuitBreakerOpen = false;
-      }
+      this._resetCircuitBreaker();
     } catch (err) {
       console.error('[StateStore] Failed to write state file:', err);
       // Re-mark dirty so the data is retried on the next save cycle
@@ -385,11 +393,7 @@ export class StateStore {
       renameSync(tempPath, this.filePath);
       // Clear dirty flag only AFTER successful write
       this.dirty = false;
-      this.consecutiveSaveFailures = 0;
-      if (this.circuitBreakerOpen) {
-        console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
-        this.circuitBreakerOpen = false;
-      }
+      this._resetCircuitBreaker();
     } catch (err) {
       console.error('[StateStore] Failed to write state file:', err);
       this.consecutiveSaveFailures++;
@@ -415,15 +419,7 @@ export class StateStore {
       if (existsSync(backupPath)) {
         const backupContent = readFileSync(backupPath, 'utf-8');
         const parsed = JSON.parse(backupContent) as Partial<AppState>;
-        const initial = createInitialState();
-        this.state = {
-          ...initial,
-          ...parsed,
-          sessions: { ...parsed.sessions },
-          tasks: { ...parsed.tasks },
-          ralphLoop: { ...initial.ralphLoop, ...parsed.ralphLoop },
-          config: { ...initial.config, ...parsed.config },
-        };
+        this.state = this._mergeWithInitialState(parsed);
         console.log('[StateStore] Successfully recovered state from backup');
         // Reset circuit breaker after successful recovery
         this.circuitBreakerOpen = false;

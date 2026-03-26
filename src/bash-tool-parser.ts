@@ -470,120 +470,91 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    * Process a single pre-stripped line of terminal output.
    */
   private processCleanLine(cleanLine: string): void {
-    // Check for tool start
+    if (this._handleToolStart(cleanLine)) return;
+    if (this._handleToolCompletion(cleanLine)) return;
+    if (this._handleTextCommand(cleanLine)) return;
+    this._handleLogFileMention(cleanLine);
+  }
+
+  private _handleToolStart(cleanLine: string): boolean {
     const startMatch = cleanLine.match(BASH_TOOL_START_PATTERN);
-    if (startMatch) {
-      const command = startMatch[1];
-      const timeout = startMatch[2]?.trim();
+    if (!startMatch) return false;
 
-      // Check if this is a file-viewing command
-      if (this.isFileViewerCommand(command)) {
-        const filePaths = this.extractFilePaths(command);
+    const command = startMatch[1];
+    const timeout = startMatch[2]?.trim();
 
-        // Skip if any file path is already tracked (cross-pattern dedup)
-        if (filePaths.some((fp) => this.isFilePathTracked(fp))) {
-          return;
-        }
+    if (!this.isFileViewerCommand(command)) return true;
 
-        if (filePaths.length > 0) {
-          const tool: ActiveBashTool = {
-            id: uuidv4(),
-            command,
-            filePaths,
-            timeout,
-            startedAt: Date.now(),
-            status: 'running',
-            sessionId: this._sessionId,
-          };
+    const filePaths = this.extractFilePaths(command);
 
-          // Enforce max tools limit
-          if (this._activeTools.size >= MAX_ACTIVE_TOOLS) {
-            // Remove oldest tool (O(n) min-scan instead of O(n log n) sort)
-            let oldestKey: string | undefined;
-            let oldestTime = Infinity;
-            for (const [key, entry] of this._activeTools) {
-              if (entry.startedAt < oldestTime) {
-                oldestTime = entry.startedAt;
-                oldestKey = key;
-              }
-            }
-            if (oldestKey) {
-              this._activeTools.delete(oldestKey);
-            }
+    // Skip if any file path is already tracked (cross-pattern dedup)
+    if (filePaths.some((fp) => this.isFilePathTracked(fp))) return true;
+
+    if (filePaths.length > 0) {
+      const tool = this._createActiveTool(command, filePaths, 'running', timeout);
+
+      // Enforce max tools limit
+      if (this._activeTools.size >= MAX_ACTIVE_TOOLS) {
+        // Remove oldest tool (O(n) min-scan instead of O(n log n) sort)
+        let oldestKey: string | undefined;
+        let oldestTime = Infinity;
+        for (const [key, entry] of this._activeTools) {
+          if (entry.startedAt < oldestTime) {
+            oldestTime = entry.startedAt;
+            oldestKey = key;
           }
-
-          this._activeTools.set(tool.id, tool);
-          this._lastToolId = tool.id;
-
-          this.emit('toolStart', tool);
-          this.scheduleUpdate();
         }
-      }
-      return;
-    }
-
-    // Check for tool completion
-    if (TOOL_COMPLETION_PATTERN.test(cleanLine) && this._lastToolId) {
-      const tool = this._activeTools.get(this._lastToolId);
-      if (tool && tool.status === 'running') {
-        tool.status = 'completed';
-        this.emit('toolEnd', tool);
-        this.scheduleUpdate();
-
-        // Remove completed tool after a short delay to allow UI to show completion
-        this.cleanup.setTimeout(
-          () => {
-            if (this._destroyed) return;
-            this._activeTools.delete(tool.id);
-            this.scheduleUpdate();
-          },
-          2000,
-          { description: 'auto-remove completed tool' }
-        );
-      }
-      this._lastToolId = null;
-      return;
-    }
-
-    // Fallback: Check for command suggestions in plain text (e.g., "tail -f /tmp/file.log")
-    const textCmdMatch = cleanLine.match(TEXT_COMMAND_PATTERN);
-    if (textCmdMatch) {
-      const filePath = textCmdMatch[2];
-
-      // Create a suggestion tool (marked as 'suggestion' status)
-      const tool: ActiveBashTool = {
-        id: uuidv4(),
-        command: cleanLine.trim(),
-        filePaths: [filePath],
-        timeout: undefined,
-        startedAt: Date.now(),
-        status: 'running', // Shows as clickable
-        sessionId: this._sessionId,
-      };
-
-      // Don't add if file path already tracked (cross-pattern dedup)
-      if (this.isFilePathTracked(filePath)) {
-        return;
+        if (oldestKey) {
+          this._activeTools.delete(oldestKey);
+        }
       }
 
       this._activeTools.set(tool.id, tool);
+      this._lastToolId = tool.id;
+
       this.emit('toolStart', tool);
       this.scheduleUpdate();
-
-      // Auto-remove suggestions after 30 seconds
-      this.cleanup.setTimeout(
-        () => {
-          if (this._destroyed) return;
-          this._activeTools.delete(tool.id);
-          this.scheduleUpdate();
-        },
-        30000,
-        { description: 'auto-remove suggestion tool' }
-      );
-      return;
     }
 
-    // Last fallback: Check for log file paths mentioned anywhere in the line
+    return true;
+  }
+
+  private _handleToolCompletion(cleanLine: string): boolean {
+    if (!TOOL_COMPLETION_PATTERN.test(cleanLine) || !this._lastToolId) return false;
+
+    const tool = this._activeTools.get(this._lastToolId);
+    if (tool && tool.status === 'running') {
+      tool.status = 'completed';
+      this.emit('toolEnd', tool);
+      this.scheduleUpdate();
+
+      this._scheduleAutoRemove(tool.id, 2000, 'auto-remove completed tool');
+    }
+    this._lastToolId = null;
+    return true;
+  }
+
+  private _handleTextCommand(cleanLine: string): boolean {
+    const textCmdMatch = cleanLine.match(TEXT_COMMAND_PATTERN);
+    if (!textCmdMatch) return false;
+
+    const filePath = textCmdMatch[2];
+
+    // Don't add if file path already tracked (cross-pattern dedup)
+    if (this.isFilePathTracked(filePath)) return true;
+
+    const tool = this._createActiveTool(cleanLine.trim(), [filePath], 'running');
+
+    this._activeTools.set(tool.id, tool);
+    this.emit('toolStart', tool);
+    this.scheduleUpdate();
+
+    // Auto-remove suggestions after 30 seconds
+    this._scheduleAutoRemove(tool.id, 30000, 'auto-remove suggestion tool');
+    return true;
+  }
+
+  private _handleLogFileMention(cleanLine: string): void {
     LOG_FILE_MENTION_PATTERN.lastIndex = 0;
     let logMatch;
     while ((logMatch = LOG_FILE_MENTION_PATTERN.exec(cleanLine)) !== null) {
@@ -595,31 +566,44 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
       // Skip if file path already tracked (cross-pattern dedup)
       if (this.isFilePathTracked(filePath)) continue;
 
-      const tool: ActiveBashTool = {
-        id: uuidv4(),
-        command: `View: ${filePath}`,
-        filePaths: [filePath],
-        timeout: undefined,
-        startedAt: Date.now(),
-        status: 'running',
-        sessionId: this._sessionId,
-      };
+      const tool = this._createActiveTool(`View: ${filePath}`, [filePath], 'running');
 
       this._activeTools.set(tool.id, tool);
       this.emit('toolStart', tool);
       this.scheduleUpdate();
 
       // Auto-remove after 60 seconds
-      this.cleanup.setTimeout(
-        () => {
-          if (this._destroyed) return;
-          this._activeTools.delete(tool.id);
-          this.scheduleUpdate();
-        },
-        60000,
-        { description: 'auto-remove log file tool' }
-      );
+      this._scheduleAutoRemove(tool.id, 60000, 'auto-remove log file tool');
     }
+  }
+
+  private _createActiveTool(
+    command: string,
+    filePaths: string[],
+    status: ActiveBashTool['status'],
+    timeout?: string
+  ): ActiveBashTool {
+    return {
+      id: uuidv4(),
+      command,
+      filePaths,
+      timeout,
+      startedAt: Date.now(),
+      status,
+      sessionId: this._sessionId,
+    };
+  }
+
+  private _scheduleAutoRemove(toolId: string, delayMs: number, description: string): void {
+    this.cleanup.setTimeout(
+      () => {
+        if (this._destroyed) return;
+        this._activeTools.delete(toolId);
+        this.scheduleUpdate();
+      },
+      delayMs,
+      { description }
+    );
   }
 
   /**

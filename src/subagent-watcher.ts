@@ -988,6 +988,24 @@ export class SubagentWatcher extends EventEmitter {
     return truncated.replace(/[.!?,:\s]+$/, '');
   }
 
+  private async _resolveDescription(
+    projectHash: string,
+    sessionId: string,
+    agentId: string,
+    filePath: string,
+    fallbackText?: string
+  ): Promise<string | undefined> {
+    // First try parent transcript (most reliable)
+    const fromParent = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
+    if (fromParent) return fromParent;
+
+    // Fallback: inline text (from processEntry) or file extraction
+    if (fallbackText) {
+      return this.extractSmartTitle(fallbackText);
+    }
+    return this.extractDescriptionFromFile(filePath);
+  }
+
   /**
    * Extract the short description from the parent session's transcript.
    * This is the most reliable method because it reads the actual Task tool result
@@ -1245,18 +1263,13 @@ export class SubagentWatcher extends EventEmitter {
 
       // Retry description extraction if missing (race condition fix)
       if (!existingInfo.description) {
-        // First try parent transcript (most reliable)
-        let extractedDescription = await this.extractDescriptionFromParentTranscript(
+        const extractedDescription = await this._resolveDescription(
           existingInfo.projectHash,
           existingInfo.sessionId,
-          agentId
+          agentId,
+          filePath
         );
-        // Fallback to subagent file
-        if (!extractedDescription) {
-          extractedDescription = await this.extractDescriptionFromFile(filePath);
-        }
         if (extractedDescription) {
-          // Check if this is an internal agent - if so, remove it
           if (this.isInternalAgent(extractedDescription)) {
             this.removeAgent(agentId);
             return;
@@ -1307,13 +1320,7 @@ export class SubagentWatcher extends EventEmitter {
     }
 
     // Extract description - prefer reading from parent transcript (most reliable)
-    // The parent transcript has the exact Task tool call with description parameter
-    let description = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
-
-    // Fallback: extract a smart title from the subagent's prompt if parent lookup failed
-    if (!description) {
-      description = await this.extractDescriptionFromFile(filePath);
-    }
+    const description = await this._resolveDescription(projectHash, sessionId, agentId, filePath);
 
     // Skip internal Claude Code agents (e.g., suggestion mode) - not real subagents
     if (this.isInternalAgent(description)) {
@@ -1406,43 +1413,11 @@ export class SubagentWatcher extends EventEmitter {
   private async processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): Promise<void> {
     const info = this.agentInfo.get(agentId);
 
-    // Extract model from assistant messages (first one sets the model)
-    if (info && entry.type === 'assistant' && entry.message?.model && !info.model) {
-      info.model = entry.message.model;
-      info.modelShort = this.extractModelShort(entry.message.model);
-      this.emit('subagent:updated', info);
-    }
+    if (info) {
+      this._processModelInfo(entry, info);
+      this._processTokenInfo(entry, info);
 
-    // Aggregate token usage from messages
-    if (info && entry.message?.usage) {
-      if (entry.message.usage.input_tokens) {
-        info.totalInputTokens = (info.totalInputTokens || 0) + entry.message.usage.input_tokens;
-      }
-      if (entry.message.usage.output_tokens) {
-        info.totalOutputTokens = (info.totalOutputTokens || 0) + entry.message.usage.output_tokens;
-      }
-    }
-
-    // Check if this is first user message and description is missing
-    if (info && !info.description && entry.type === 'user' && entry.message?.content) {
-      // First try parent transcript (most reliable)
-      let description = await this.extractDescriptionFromParentTranscript(info.projectHash, info.sessionId, agentId);
-      // Fallback: extract smart title from the prompt content
-      if (!description) {
-        const text = this.extractFirstTextContent(entry.message.content);
-        if (text) {
-          description = this.extractSmartTitle(text);
-        }
-      }
-      if (description) {
-        // Check if this is an internal agent - if so, remove it
-        if (this.isInternalAgent(description)) {
-          this.removeAgent(agentId);
-          return;
-        }
-        info.description = description;
-        this.emit('subagent:updated', info);
-      }
+      if (await this._processDescription(entry, agentId, info)) return;
     }
 
     if (entry.type === 'progress' && entry.data) {
@@ -1453,7 +1428,6 @@ export class SubagentWatcher extends EventEmitter {
         progressType: entry.data.type,
         query: entry.data.query,
         resultCount: entry.data.resultCount,
-        // Extract hook event info if present
         hookEvent: entry.data.hookEvent,
         hookName:
           entry.data.hookName ||
@@ -1463,115 +1437,166 @@ export class SubagentWatcher extends EventEmitter {
       };
       this.emit('subagent:progress', progress);
     } else if (entry.type === 'assistant' && entry.message?.content) {
-      // Handle both string and array content formats
-      if (typeof entry.message.content === 'string') {
-        const text = entry.message.content.trim();
-        if (text.length > 0) {
-          const message: SubagentMessage = {
+      this._processAssistantContent(entry, agentId, sessionId);
+    } else if (entry.type === 'user' && entry.message?.content) {
+      this._processUserContent(entry, agentId, sessionId);
+    }
+  }
+
+  private _processModelInfo(entry: SubagentTranscriptEntry, agent: SubagentInfo): void {
+    if (entry.type === 'assistant' && entry.message?.model && !agent.model) {
+      agent.model = entry.message.model;
+      agent.modelShort = this.extractModelShort(entry.message.model);
+      this.emit('subagent:updated', agent);
+    }
+  }
+
+  private _processTokenInfo(entry: SubagentTranscriptEntry, agent: SubagentInfo): void {
+    if (!entry.message?.usage) return;
+    if (entry.message.usage.input_tokens) {
+      agent.totalInputTokens = (agent.totalInputTokens || 0) + entry.message.usage.input_tokens;
+    }
+    if (entry.message.usage.output_tokens) {
+      agent.totalOutputTokens = (agent.totalOutputTokens || 0) + entry.message.usage.output_tokens;
+    }
+  }
+
+  private async _processDescription(
+    entry: SubagentTranscriptEntry,
+    agentId: string,
+    agent: SubagentInfo
+  ): Promise<boolean> {
+    if (agent.description || entry.type !== 'user' || !entry.message?.content) return false;
+
+    const fallbackText = this.extractFirstTextContent(entry.message.content);
+    const description = await this._resolveDescription(
+      agent.projectHash,
+      agent.sessionId,
+      agentId,
+      agent.filePath,
+      fallbackText
+    );
+    if (description) {
+      if (this.isInternalAgent(description)) {
+        this.removeAgent(agentId);
+        return true;
+      }
+      agent.description = description;
+      this.emit('subagent:updated', agent);
+    }
+    return false;
+  }
+
+  private _processAssistantContent(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): void {
+    const messageContent = entry.message!.content;
+    if (typeof messageContent === 'string') {
+      const text = messageContent.trim();
+      if (text.length > 0) {
+        const message: SubagentMessage = {
+          agentId,
+          sessionId,
+          timestamp: entry.timestamp,
+          role: 'assistant',
+          text: text.substring(0, MESSAGE_TEXT_LIMIT),
+        };
+        this.emit('subagent:message', message);
+      }
+    } else {
+      for (const content of messageContent) {
+        if (content.type === 'tool_use' && content.name) {
+          // Store toolUseId for linking to results, with timestamp for TTL cleanup
+          if (content.id) {
+            if (!this.pendingToolCalls.has(agentId)) {
+              this.pendingToolCalls.set(agentId, new Map());
+            }
+            const agentCalls = this.pendingToolCalls.get(agentId)!;
+            // Enforce size limit to prevent memory leak from rapid tool calls
+            if (agentCalls.size >= MAX_PENDING_TOOL_CALLS) {
+              // FIFO eviction: delete first (oldest) entry using Map insertion order
+              const firstKey = agentCalls.keys().next().value;
+              if (firstKey !== undefined) agentCalls.delete(firstKey);
+            }
+            agentCalls.set(content.id, {
+              toolName: content.name,
+              timestamp: Date.now(),
+            });
+          }
+
+          const toolCall: SubagentToolCall = {
             agentId,
             sessionId,
             timestamp: entry.timestamp,
-            role: 'assistant',
-            text: text.substring(0, MESSAGE_TEXT_LIMIT),
+            tool: content.name,
+            input: this.getTruncatedInput(content.name, content.input || {}),
+            toolUseId: content.id,
+            fullInput: content.input || {},
           };
-          this.emit('subagent:message', message);
-        }
-      } else {
-        for (const content of entry.message.content) {
-          if (content.type === 'tool_use' && content.name) {
-            // Store toolUseId for linking to results, with timestamp for TTL cleanup
-            if (content.id) {
-              if (!this.pendingToolCalls.has(agentId)) {
-                this.pendingToolCalls.set(agentId, new Map());
-              }
-              const agentCalls = this.pendingToolCalls.get(agentId)!;
-              // Enforce size limit to prevent memory leak from rapid tool calls
-              if (agentCalls.size >= MAX_PENDING_TOOL_CALLS) {
-                // FIFO eviction: delete first (oldest) entry using Map insertion order
-                const firstKey = agentCalls.keys().next().value;
-                if (firstKey !== undefined) agentCalls.delete(firstKey);
-              }
-              agentCalls.set(content.id, {
-                toolName: content.name,
-                timestamp: Date.now(),
-              });
-            }
+          this.emit('subagent:tool_call', toolCall);
 
-            const toolCall: SubagentToolCall = {
+          // Update tool call count
+          const agentInfo = this.agentInfo.get(agentId);
+          if (agentInfo) {
+            agentInfo.toolCallCount++;
+          }
+        } else if (content.type === 'tool_result' && content.tool_use_id) {
+          this.emitToolResult(
+            { tool_use_id: content.tool_use_id, content: content.content, is_error: content.is_error },
+            agentId,
+            sessionId,
+            entry.timestamp
+          );
+        } else if (content.type === 'text' && content.text) {
+          const text = content.text.trim();
+          if (text.length > 0) {
+            const message: SubagentMessage = {
               agentId,
               sessionId,
               timestamp: entry.timestamp,
-              tool: content.name,
-              input: this.getTruncatedInput(content.name, content.input || {}),
-              toolUseId: content.id,
-              fullInput: content.input || {},
+              role: 'assistant',
+              text: text.substring(0, MESSAGE_TEXT_LIMIT),
             };
-            this.emit('subagent:tool_call', toolCall);
-
-            // Update tool call count
-            const agentInfo = this.agentInfo.get(agentId);
-            if (agentInfo) {
-              agentInfo.toolCallCount++;
-            }
-          } else if (content.type === 'tool_result' && content.tool_use_id) {
-            // Extract tool result
-            this.emitToolResult(
-              { tool_use_id: content.tool_use_id, content: content.content, is_error: content.is_error },
-              agentId,
-              sessionId,
-              entry.timestamp
-            );
-          } else if (content.type === 'text' && content.text) {
-            const text = content.text.trim();
-            if (text.length > 0) {
-              const message: SubagentMessage = {
-                agentId,
-                sessionId,
-                timestamp: entry.timestamp,
-                role: 'assistant',
-                text: text.substring(0, MESSAGE_TEXT_LIMIT), // Limit text length
-              };
-              this.emit('subagent:message', message);
-            }
+            this.emit('subagent:message', message);
           }
         }
       }
-    } else if (entry.type === 'user' && entry.message?.content) {
-      // Handle both string and array content formats - also check for tool_result in user messages
-      if (typeof entry.message.content === 'string') {
-        const userText = entry.message.content.trim();
-        if (userText.length > 0 && userText.length < 500) {
-          const message: SubagentMessage = {
+    }
+  }
+
+  private _processUserContent(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): void {
+    const messageContent = entry.message!.content;
+    if (typeof messageContent === 'string') {
+      const userText = messageContent.trim();
+      if (userText.length > 0 && userText.length < 500) {
+        const message: SubagentMessage = {
+          agentId,
+          sessionId,
+          timestamp: entry.timestamp,
+          role: 'user',
+          text: userText,
+        };
+        this.emit('subagent:message', message);
+      }
+    } else {
+      // Check for tool_result blocks in user messages (common pattern)
+      for (const content of messageContent) {
+        if (content.type === 'tool_result' && content.tool_use_id) {
+          this.emitToolResult(
+            { tool_use_id: content.tool_use_id, content: content.content, is_error: content.is_error },
             agentId,
             sessionId,
-            timestamp: entry.timestamp,
-            role: 'user',
-            text: userText,
-          };
-          this.emit('subagent:message', message);
-        }
-      } else {
-        // Check for tool_result blocks in user messages (common pattern)
-        for (const content of entry.message.content) {
-          if (content.type === 'tool_result' && content.tool_use_id) {
-            this.emitToolResult(
-              { tool_use_id: content.tool_use_id, content: content.content, is_error: content.is_error },
+            entry.timestamp
+          );
+        } else if (content.type === 'text' && content.text) {
+          const userText = content.text.trim();
+          if (userText.length > 0 && userText.length < 500) {
+            const message: SubagentMessage = {
               agentId,
               sessionId,
-              entry.timestamp
-            );
-          } else if (content.type === 'text' && content.text) {
-            const userText = content.text.trim();
-            if (userText.length > 0 && userText.length < 500) {
-              const message: SubagentMessage = {
-                agentId,
-                sessionId,
-                timestamp: entry.timestamp,
-                role: 'user',
-                text: userText,
-              };
-              this.emit('subagent:message', message);
-            }
+              timestamp: entry.timestamp,
+              role: 'user',
+              text: userText,
+            };
+            this.emit('subagent:message', message);
           }
         }
       }

@@ -860,27 +860,29 @@ export class RespawnController extends EventEmitter {
       }
     };
 
-    // Ensure timeouts are positive
-    validatePositiveTimeout('idleTimeoutMs');
-    validatePositiveTimeout('completionConfirmMs');
-    validatePositiveTimeout('noOutputTimeoutMs');
-    validatePositiveTimeout('autoAcceptDelayMs', true);
-    validatePositiveTimeout('interStepDelayMs');
+    const REQUIRED_TIMEOUT_FIELDS = [
+      'idleTimeoutMs',
+      'completionConfirmMs',
+      'noOutputTimeoutMs',
+      'interStepDelayMs',
+      'aiIdleCheckTimeoutMs',
+      'aiIdleCheckMaxContext',
+      'aiPlanCheckTimeoutMs',
+      'aiPlanCheckMaxContext',
+    ] as const;
+    for (const field of REQUIRED_TIMEOUT_FIELDS) {
+      validatePositiveTimeout(field);
+    }
+
+    const ALLOW_ZERO_FIELDS = ['autoAcceptDelayMs', 'aiIdleCheckCooldownMs', 'aiPlanCheckCooldownMs'] as const;
+    for (const field of ALLOW_ZERO_FIELDS) {
+      validatePositiveTimeout(field, true);
+    }
 
     // Ensure completion confirm doesn't exceed no-output timeout
     if (c.completionConfirmMs > c.noOutputTimeoutMs) {
       c.completionConfirmMs = c.noOutputTimeoutMs;
     }
-
-    // Ensure AI check timeouts are positive
-    validatePositiveTimeout('aiIdleCheckTimeoutMs');
-    validatePositiveTimeout('aiIdleCheckCooldownMs', true);
-    validatePositiveTimeout('aiIdleCheckMaxContext');
-
-    // Ensure plan check timeouts are positive
-    validatePositiveTimeout('aiPlanCheckTimeoutMs');
-    validatePositiveTimeout('aiPlanCheckCooldownMs', true);
-    validatePositiveTimeout('aiPlanCheckMaxContext');
   }
 
   /** Wire up AI checker events to controller events (removes existing listeners first to prevent duplicates) */
@@ -1385,98 +1387,13 @@ export class RespawnController extends EventEmitter {
       this.lastTokenChangeTime = now;
     }
 
-    // Detect completion message FIRST (Layer 1) - PRIMARY DETECTION
-    // Check this before working patterns because completion message indicates
-    // the work is done, even if working patterns are still in the rolling window
-    if (isCompletionMessage(data)) {
-      // Clear the rolling window - completion marks a transition point
-      this.clearWorkingPatternWindow();
-      this.workingDetected = false;
-      this.completionMessageTime = now;
-      this.cancelAutoAcceptTimer(); // Normal idle flow handles this
-      this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
+    // Layer 1: Completion message (PRIMARY) — checked before working patterns
+    if (this._detectCompletionMessage(data, now)) return;
 
-      // In watching state, start completion confirmation timer
-      if (this._state === 'watching') {
-        this.startCompletionConfirmTimer();
-        return;
-      }
+    // Layer 4: Working patterns
+    if (this._detectWorkingPattern(data, now)) return;
 
-      // In waiting states, also use confirmation timer (same detection logic)
-      // This ensures we wait for Claude to finish before proceeding
-      // Note: 'watching' is already handled above and returns early
-      switch (this._state) {
-        case 'waiting_update':
-          this.startStepConfirmTimer('update');
-          break;
-        case 'waiting_clear':
-          this.checkClearComplete(); // /clear is quick, no need to wait
-          break;
-        case 'waiting_init':
-          this.startStepConfirmTimer('init');
-          break;
-        case 'waiting_kickstart':
-          this.startStepConfirmTimer('kickstart');
-          break;
-        // Non-waiting states: completion message is ignored
-        case 'confirming_idle':
-        case 'ai_checking':
-        case 'sending_update':
-        case 'sending_clear':
-        case 'sending_init':
-        case 'monitoring_init':
-        case 'sending_kickstart':
-        case 'stopped':
-          // Completion message during these states is ignored
-          break;
-        default:
-          assertNever(this._state, `Unhandled RespawnState in completion detection: ${this._state}`);
-      }
-      return;
-    }
-
-    // Detect working patterns (Layer 4)
-    const isWorking = this.checkWorkingPattern(data);
-    if (isWorking) {
-      this.workingDetected = true;
-      this.promptDetected = false;
-      this.elicitationDetected = false; // Clear on new work cycle
-      this.resetHookState(); // Clear hook signals on new work
-      this.lastWorkingPatternTime = now;
-
-      // Cancel hook confirmation timer if running
-      this.cancelTrackedTimer('hook-confirm', 'working patterns detected');
-
-      // Cancel any pending completion confirmation
-      this.cancelCompletionConfirm();
-
-      // Cancel any pending step confirmation (Claude is still working)
-      this.cancelStepConfirm();
-
-      // If AI check is running, cancel it (Claude is working)
-      if (this._state === 'ai_checking') {
-        this.log('Working patterns detected during AI check, cancelling');
-        this.aiChecker.cancel();
-        this.setState('watching');
-      }
-
-      // Cancel plan check if running (Claude started working)
-      if (this.planChecker.status === 'checking') {
-        this.log('Working patterns detected during plan check, cancelling');
-        this.planChecker.cancel();
-      }
-
-      // If we're monitoring init and work started, go to watching (no kickstart needed)
-      if (this._state === 'monitoring_init') {
-        this.log('/init triggered work, skipping kickstart');
-        this.emit('stepCompleted', 'init');
-        this.completeCycle();
-      }
-      return;
-    }
-
-    // In confirming_idle or ai_checking state, substantial output cancels the flow.
-    // This prevents false triggers when Claude pauses briefly mid-work.
+    // Substantial output during confirming_idle/ai_checking cancels the flow
     if (this._state === 'confirming_idle' || this._state === 'ai_checking') {
       // Strip ANSI escape codes to check if there's real content
       ANSI_ESCAPE_PATTERN_SIMPLE.lastIndex = 0;
@@ -1497,43 +1414,137 @@ export class RespawnController extends EventEmitter {
       }
     }
 
-    // Legacy fallback: detect prompt characters (still useful for waiting_* states)
-    const hasPrompt = PROMPT_PATTERNS.some((pattern) => data.includes(pattern));
-    if (hasPrompt) {
-      this.promptDetected = true;
-      this.workingDetected = false;
+    // Legacy fallback: prompt detection
+    this._detectPrompt(data);
+  }
 
-      // Handle legacy detection in waiting states - also use confirmation timers
-      switch (this._state) {
-        case 'waiting_update':
-          this.startStepConfirmTimer('update');
-          break;
-        case 'waiting_clear':
-          this.checkClearComplete(); // /clear is quick, no need to wait
-          break;
-        case 'waiting_init':
-          this.startStepConfirmTimer('init');
-          break;
-        case 'monitoring_init':
-          this.checkMonitoringInitIdle();
-          break;
-        case 'waiting_kickstart':
-          this.startStepConfirmTimer('kickstart');
-          break;
-        // Non-waiting states: prompt detection is informational only
-        case 'watching':
-        case 'confirming_idle':
-        case 'ai_checking':
-        case 'sending_update':
-        case 'sending_clear':
-        case 'sending_init':
-        case 'sending_kickstart':
-        case 'stopped':
-          // Prompt detection during these states doesn't trigger action
-          break;
-        default:
-          assertNever(this._state, `Unhandled RespawnState in prompt detection: ${this._state}`);
-      }
+  private _detectCompletionMessage(data: string, now: number): boolean {
+    if (!isCompletionMessage(data)) return false;
+
+    // Clear the rolling window - completion marks a transition point
+    this.clearWorkingPatternWindow();
+    this.workingDetected = false;
+    this.completionMessageTime = now;
+    this.cancelAutoAcceptTimer(); // Normal idle flow handles this
+    this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
+
+    // In watching state, start completion confirmation timer
+    if (this._state === 'watching') {
+      this.startCompletionConfirmTimer();
+      return true;
+    }
+
+    // In waiting states, also use confirmation timer (same detection logic)
+    // This ensures we wait for Claude to finish before proceeding
+    // Note: 'watching' is already handled above and returns early
+    switch (this._state) {
+      case 'waiting_update':
+        this.startStepConfirmTimer('update');
+        break;
+      case 'waiting_clear':
+        this.checkClearComplete(); // /clear is quick, no need to wait
+        break;
+      case 'waiting_init':
+        this.startStepConfirmTimer('init');
+        break;
+      case 'waiting_kickstart':
+        this.startStepConfirmTimer('kickstart');
+        break;
+      // Non-waiting states: completion message is ignored
+      case 'confirming_idle':
+      case 'ai_checking':
+      case 'sending_update':
+      case 'sending_clear':
+      case 'sending_init':
+      case 'monitoring_init':
+      case 'sending_kickstart':
+      case 'stopped':
+        // Completion message during these states is ignored
+        break;
+      default:
+        assertNever(this._state, `Unhandled RespawnState in completion detection: ${this._state}`);
+    }
+    return true;
+  }
+
+  private _detectWorkingPattern(data: string, now: number): boolean {
+    const isWorking = this.checkWorkingPattern(data);
+    if (!isWorking) return false;
+
+    this.workingDetected = true;
+    this.promptDetected = false;
+    this.elicitationDetected = false; // Clear on new work cycle
+    this.resetHookState(); // Clear hook signals on new work
+    this.lastWorkingPatternTime = now;
+
+    // Cancel hook confirmation timer if running
+    this.cancelTrackedTimer('hook-confirm', 'working patterns detected');
+
+    // Cancel any pending completion confirmation
+    this.cancelCompletionConfirm();
+
+    // Cancel any pending step confirmation (Claude is still working)
+    this.cancelStepConfirm();
+
+    // If AI check is running, cancel it (Claude is working)
+    if (this._state === 'ai_checking') {
+      this.log('Working patterns detected during AI check, cancelling');
+      this.aiChecker.cancel();
+      this.setState('watching');
+    }
+
+    // Cancel plan check if running (Claude started working)
+    if (this.planChecker.status === 'checking') {
+      this.log('Working patterns detected during plan check, cancelling');
+      this.planChecker.cancel();
+    }
+
+    // If we're monitoring init and work started, go to watching (no kickstart needed)
+    if (this._state === 'monitoring_init') {
+      this.log('/init triggered work, skipping kickstart');
+      this.emit('stepCompleted', 'init');
+      this.completeCycle();
+    }
+    return true;
+  }
+
+  private _detectPrompt(data: string): void {
+    const hasPrompt = PROMPT_PATTERNS.some((pattern) => data.includes(pattern));
+    if (!hasPrompt) return;
+
+    this.promptDetected = true;
+    this.workingDetected = false;
+
+    // Handle legacy detection in waiting states - also use confirmation timers
+    switch (this._state) {
+      case 'waiting_update':
+        this.startStepConfirmTimer('update');
+        break;
+      case 'waiting_clear':
+        this.checkClearComplete(); // /clear is quick, no need to wait
+        break;
+      case 'waiting_init':
+        this.startStepConfirmTimer('init');
+        break;
+      case 'monitoring_init':
+        this.checkMonitoringInitIdle();
+        break;
+      case 'waiting_kickstart':
+        this.startStepConfirmTimer('kickstart');
+        break;
+      // Non-waiting states: prompt detection is informational only
+      case 'watching':
+      case 'confirming_idle':
+      case 'ai_checking':
+      case 'sending_update':
+      case 'sending_clear':
+      case 'sending_init':
+      case 'sending_kickstart':
+      case 'stopped':
+        // Prompt detection during these states doesn't trigger action
+        break;
+      default:
+        assertNever(this._state, `Unhandled RespawnState in prompt detection: ${this._state}`);
     }
   }
 

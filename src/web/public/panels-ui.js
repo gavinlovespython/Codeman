@@ -14,6 +14,13 @@
  */
 
 Object.assign(CodemanApp.prototype, {
+  _addActivityEntry(agentId, entry, maxSize = 50) {
+    const activity = this.subagentActivity.get(agentId) || [];
+    activity.push(entry);
+    if (activity.length > maxSize) activity.shift();
+    this.subagentActivity.set(agentId, activity);
+  },
+
   // Tasks
   _onTaskCreated(data) {
     this.renderSessionTabs();
@@ -106,15 +113,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Notify about new subagent discovery
     const parentId = this.subagentParentMap.get(data.agentId);
-    const parentSession = parentId ? this.sessions.get(parentId) : null;
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'subagent-spawn',
-      sessionId: parentId || data.sessionId,
-      sessionName: parentSession?.name || parentId || data.sessionId,
-      title: 'Subagent Spawned',
-      message: data.description || 'New background agent started',
-    });
+    this._notifySession(parentId || data.sessionId, 'info', 'subagent-spawn', 'Subagent Spawned', data.description || 'New background agent started');
   },
 
   _onSubagentUpdated(data) {
@@ -135,10 +134,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onSubagentToolCall(data) {
-    const activity = this.subagentActivity.get(data.agentId) || [];
-    activity.push({ type: 'tool', ...data });
-    if (activity.length > 50) activity.shift(); // Keep last 50 entries
-    this.subagentActivity.set(data.agentId, activity);
+    this._addActivityEntry(data.agentId, { type: 'tool', ...data });
     if (this.activeSubagentId === data.agentId) {
       this.renderSubagentDetail();
     }
@@ -150,10 +146,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onSubagentProgress(data) {
-    const activity = this.subagentActivity.get(data.agentId) || [];
-    activity.push({ type: 'progress', ...data });
-    if (activity.length > 50) activity.shift();
-    this.subagentActivity.set(data.agentId, activity);
+    this._addActivityEntry(data.agentId, { type: 'progress', ...data });
     if (this.activeSubagentId === data.agentId) {
       this.renderSubagentDetail();
     }
@@ -164,10 +157,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onSubagentMessage(data) {
-    const activity = this.subagentActivity.get(data.agentId) || [];
-    activity.push({ type: 'message', ...data });
-    if (activity.length > 50) activity.shift();
-    this.subagentActivity.set(data.agentId, activity);
+    this._addActivityEntry(data.agentId, { type: 'message', ...data });
     if (this.activeSubagentId === data.agentId) {
       this.renderSubagentDetail();
     }
@@ -190,10 +180,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Add to activity stream
-    const activity = this.subagentActivity.get(data.agentId) || [];
-    activity.push({ type: 'tool_result', ...data });
-    if (activity.length > 50) activity.shift();
-    this.subagentActivity.set(data.agentId, activity);
+    this._addActivityEntry(data.agentId, { type: 'tool_result', ...data });
 
     if (this.activeSubagentId === data.agentId) {
       this.renderSubagentDetail();
@@ -224,15 +211,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Notify about subagent completion
     const parentId = this.subagentParentMap.get(data.agentId);
-    const parentSession = parentId ? this.sessions.get(parentId) : null;
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'subagent-complete',
-      sessionId: parentId || existing?.sessionId || data.sessionId,
-      sessionName: parentSession?.name || parentId || data.sessionId,
-      title: 'Subagent Completed',
-      message: existing?.description || data.description || 'Background agent finished',
-    });
+    this._notifySession(parentId || existing?.sessionId || data.sessionId, 'info', 'subagent-complete', 'Subagent Completed', existing?.description || data.description || 'Background agent finished');
 
     // Clean up activity/tool data for completed agents after 5 minutes
     // This prevents memory leaks from long-running sessions with many subagents

@@ -39,42 +39,36 @@ export function registerOrchestratorRoutes(app: FastifyInstance, ctx: Orchestrat
     return loop;
   }
 
+  const EVENT_MAP: [string, (typeof SseEvent)[keyof typeof SseEvent], string[]][] = [
+    ['stateChanged', SseEvent.OrchestratorStateChanged, ['state', 'prevState']],
+    ['planProgress', SseEvent.OrchestratorPlanProgress, ['phase', 'detail']],
+    ['planReady', SseEvent.OrchestratorPlanReady, ['plan']],
+    ['phaseStarted', SseEvent.OrchestratorPhaseStarted, ['phase']],
+    ['phaseCompleted', SseEvent.OrchestratorPhaseCompleted, ['phase']],
+    ['phaseFailed', SseEvent.OrchestratorPhaseFailed, ['phase', 'reason']],
+    ['taskAssigned', SseEvent.OrchestratorTaskAssigned, ['task', 'sessionId']],
+    ['taskCompleted', SseEvent.OrchestratorTaskCompleted, ['task']],
+    ['taskFailed', SseEvent.OrchestratorTaskFailed, ['task', 'error']],
+    ['completed', SseEvent.OrchestratorCompleted, ['stats']],
+  ];
+
   let forwardingLoop: import('../../orchestrator-loop.js').OrchestratorLoop | null = null;
   function setupEventForwarding(loop: import('../../orchestrator-loop.js').OrchestratorLoop) {
     if (forwardingLoop === loop) return; // Already attached to this loop instance
     forwardingLoop = loop;
-    loop.on('stateChanged', (state, prevState) => {
-      ctx.broadcast(SseEvent.OrchestratorStateChanged, { state, prevState });
-    });
-    loop.on('planProgress', (phase, detail) => {
-      ctx.broadcast(SseEvent.OrchestratorPlanProgress, { phase, detail });
-    });
-    loop.on('planReady', (plan) => {
-      ctx.broadcast(SseEvent.OrchestratorPlanReady, { plan });
-    });
-    loop.on('phaseStarted', (phase) => {
-      ctx.broadcast(SseEvent.OrchestratorPhaseStarted, { phase });
-    });
-    loop.on('phaseCompleted', (phase) => {
-      ctx.broadcast(SseEvent.OrchestratorPhaseCompleted, { phase });
-    });
-    loop.on('phaseFailed', (phase, reason) => {
-      ctx.broadcast(SseEvent.OrchestratorPhaseFailed, { phase, reason });
-    });
+    for (const [event, sseEvent, argNames] of EVENT_MAP) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      loop.on(event, (...args: any[]) => {
+        const payload: Record<string, unknown> = {};
+        argNames.forEach((name, i) => {
+          payload[name] = args[i];
+        });
+        ctx.broadcast(sseEvent, payload);
+      });
+    }
+    // Special cases with non-trivial payload transforms
     loop.on('verificationResult', (phase, result) => {
       ctx.broadcast(SseEvent.OrchestratorVerification, { phaseId: phase.id, result });
-    });
-    loop.on('taskAssigned', (task, sessionId) => {
-      ctx.broadcast(SseEvent.OrchestratorTaskAssigned, { task, sessionId });
-    });
-    loop.on('taskCompleted', (task) => {
-      ctx.broadcast(SseEvent.OrchestratorTaskCompleted, { task });
-    });
-    loop.on('taskFailed', (task, error) => {
-      ctx.broadcast(SseEvent.OrchestratorTaskFailed, { task, error });
-    });
-    loop.on('completed', (stats) => {
-      ctx.broadcast(SseEvent.OrchestratorCompleted, { stats });
     });
     loop.on('error', (error) => {
       ctx.broadcast(SseEvent.OrchestratorError, { error: error.message });

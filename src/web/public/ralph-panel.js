@@ -45,15 +45,7 @@ Object.assign(CodemanApp.prototype, {
       this.updateRalphState(data.sessionId, existing);
     }
 
-    const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'warning',
-      category: 'ralph-complete',
-      sessionId: data.sessionId,
-      sessionName: session?.name || this.getShortId(data.sessionId),
-      title: 'Loop Complete',
-      message: `Completion: ${data.phrase || 'unknown'}`,
-    });
+    this._notifySession(data.sessionId, 'warning', 'ralph-complete', 'Loop Complete', `Completion: ${data.phrase || 'unknown'}`);
   },
 
   _onRalphStatusUpdate(data) {
@@ -68,28 +60,12 @@ Object.assign(CodemanApp.prototype, {
     this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
     // Notify if circuit breaker opens
     if (data.status.state === 'OPEN') {
-      const session = this.sessions.get(data.sessionId);
-      this.notificationManager?.notify({
-        urgency: 'critical',
-        category: 'circuit-breaker',
-        sessionId: data.sessionId,
-        sessionName: session?.name || this.getShortId(data.sessionId),
-        title: 'Circuit Breaker Open',
-        message: data.status.reason || 'Loop stuck - no progress detected',
-      });
+      this._notifySession(data.sessionId, 'critical', 'circuit-breaker', 'Circuit Breaker Open', data.status.reason || 'Loop stuck - no progress detected');
     }
   },
 
   _onExitGateMet(data) {
-    const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'warning',
-      category: 'exit-gate',
-      sessionId: data.sessionId,
-      sessionName: session?.name || this.getShortId(data.sessionId),
-      title: 'Exit Gate Met',
-      message: `Loop ready to exit (indicators: ${data.completionIndicators})`,
-    });
+    this._notifySession(data.sessionId, 'warning', 'exit-gate', 'Exit Gate Met', `Loop ready to exit (indicators: ${data.completionIndicators})`);
   },
 
   // Bash tools

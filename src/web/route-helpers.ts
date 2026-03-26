@@ -186,6 +186,26 @@ export function sanitizeHookData(data: Record<string, unknown> | null | undefine
 }
 
 /**
+ * Toggles a service (watcher/manager) on or off based on an enabled flag.
+ * Logs start/stop to console with the given label. Runs an optional callback after starting.
+ */
+export function toggleService(
+  enabled: boolean,
+  service: { isRunning(): boolean; start(): void; stop(): void },
+  label: string,
+  onStart?: () => void
+): void {
+  if (enabled && !service.isRunning()) {
+    service.start();
+    onStart?.();
+    console.log(`${label} started via settings change`);
+  } else if (!enabled && service.isRunning()) {
+    service.stop();
+    console.log(`${label} stopped via settings change`);
+  }
+}
+
+/**
  * Auto-configure Ralph tracker for a session.
  *
  * Priority order:

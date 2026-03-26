@@ -44,21 +44,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onRespawnBlocked(data) {
-    const session = this.sessions.get(data.sessionId);
     const reasonMap = {
       circuit_breaker_open: 'Circuit Breaker Open',
       exit_signal: 'Exit Signal Detected',
       status_blocked: 'Claude Reported BLOCKED',
     };
     const title = reasonMap[data.reason] || 'Respawn Blocked';
-    this.notificationManager?.notify({
-      urgency: 'critical',
-      category: 'respawn-blocked',
-      sessionId: data.sessionId,
-      sessionName: session?.name || this.getShortId(data.sessionId),
-      title,
-      message: data.details,
-    });
+    this._notifySession(data.sessionId, 'critical', 'respawn-blocked', title, data.details);
     // Update respawn panel to show blocked state
     if (data.sessionId === this.activeSessionId) {
       const stateEl = document.getElementById('respawnStateLabel');
@@ -71,14 +63,7 @@ Object.assign(CodemanApp.prototype, {
 
   _onRespawnAutoAcceptSent(data) {
     const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'info',
-      category: 'auto-accept',
-      sessionId: data.sessionId,
-      sessionName: session?.name || this.getShortId(data.sessionId),
-      title: 'Plan Accepted',
-      message: `Accepted plan mode for ${session?.name || 'session'}`,
-    });
+    this._notifySession(data.sessionId, 'info', 'auto-accept', 'Plan Accepted', `Accepted plan mode for ${session?.name || 'session'}`);
   },
 
   _onRespawnDetectionUpdate(data) {
@@ -144,15 +129,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _onRespawnError(data) {
-    const session = this.sessions.get(data.sessionId);
-    this.notificationManager?.notify({
-      urgency: 'critical',
-      category: 'session-error',
-      sessionId: data.sessionId,
-      sessionName: session?.name || data.sessionId,
-      title: 'Respawn Error',
-      message: data.error || data.message || 'Respawn encountered an error',
-    });
+    this._notifySession(data.sessionId, 'critical', 'session-error', 'Respawn Error', data.error || data.message || 'Respawn encountered an error');
   },
 
   _onRespawnActionLog(data) {

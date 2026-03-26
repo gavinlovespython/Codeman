@@ -24,7 +24,14 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import { findSessionOrFail, formatUptime, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
+import {
+  findSessionOrFail,
+  formatUptime,
+  parseBody,
+  readJsonConfig,
+  toggleService,
+  SETTINGS_PATH,
+} from '../route-helpers.js';
 import { SseEvent } from '../sse-events.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -281,15 +288,20 @@ export function registerSystemRoutes(
 
   // ========== Stats ==========
 
-  app.get('/api/stats', async () => {
-    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+  function collectActiveTokens(): Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> {
+    const tokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
     for (const [sessionId, session] of ctx.sessions) {
-      activeSessionTokens[sessionId] = {
+      tokens[sessionId] = {
         inputTokens: session.inputTokens,
         outputTokens: session.outputTokens,
         totalCost: session.totalCost,
       };
     }
+    return tokens;
+  }
+
+  app.get('/api/stats', async () => {
+    const activeSessionTokens = collectActiveTokens();
     return {
       success: true,
       stats: ctx.store.getAggregateStats(activeSessionTokens),
@@ -298,14 +310,7 @@ export function registerSystemRoutes(
   });
 
   app.get('/api/token-stats', async () => {
-    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
-    for (const [sessionId, session] of ctx.sessions) {
-      activeSessionTokens[sessionId] = {
-        inputTokens: session.inputTokens,
-        outputTokens: session.outputTokens,
-        totalCost: session.totalCost,
-      };
-    }
+    const activeSessionTokens = collectActiveTokens();
     return {
       success: true,
       daily: ctx.store.getDailyStats(30),
@@ -414,30 +419,17 @@ export function registerSystemRoutes(
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
       // Handle subagent tracking toggle dynamically
-      const subagentEnabled = settings.subagentTrackingEnabled ?? true;
-      if (subagentEnabled && !subagentWatcher.isRunning()) {
-        subagentWatcher.start();
-        console.log('Subagent watcher started via settings change');
-      } else if (!subagentEnabled && subagentWatcher.isRunning()) {
-        subagentWatcher.stop();
-        console.log('Subagent watcher stopped via settings change');
-      }
+      toggleService((settings.subagentTrackingEnabled as boolean) ?? true, subagentWatcher, 'Subagent watcher');
 
       // Handle image watcher toggle dynamically
-      const imageWatcherEnabled = settings.imageWatcherEnabled ?? false;
-      if (imageWatcherEnabled && !imageWatcher.isRunning()) {
-        imageWatcher.start();
+      toggleService((settings.imageWatcherEnabled as boolean) ?? false, imageWatcher, 'Image watcher', () => {
         // Re-watch all active sessions that have image watcher enabled
         for (const session of ctx.sessions.values()) {
           if (session.imageWatcherEnabled) {
             imageWatcher.watchSession(session.id, session.workingDir);
           }
         }
-        console.log('Image watcher started via settings change');
-      } else if (!imageWatcherEnabled && imageWatcher.isRunning()) {
-        imageWatcher.stop();
-        console.log('Image watcher stopped via settings change');
-      }
+      });
 
       // Handle tunnel toggle dynamically
       if ('tunnelEnabled' in settings) {

@@ -231,6 +231,49 @@ export class PlanOrchestrator {
     return md;
   }
 
+  private _extractJsonFromResponse(response: string): string | null {
+    let jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+    if (jsonMatch) {
+      jsonMatch = [jsonMatch[1]]; // Use captured group (inside code block)
+    } else {
+      jsonMatch = response.match(/\{[\s\S]*\}/);
+    }
+    return jsonMatch ? jsonMatch[0] : null;
+  }
+
+  private _emitAgentFailure(
+    onSubagent: SubagentCallback | undefined,
+    agentId: string,
+    agentType: 'research' | 'planner',
+    model: string,
+    error: string,
+    durationMs: number
+  ): void {
+    onSubagent?.({
+      type: 'failed',
+      agentId,
+      agentType,
+      model,
+      status: 'failed',
+      error,
+      durationMs,
+    });
+  }
+
+  private _formatResearchSection(
+    parts: string[],
+    title: string,
+    items: unknown[],
+    formatter: (item: unknown) => string[]
+  ): void {
+    if (items.length === 0) return;
+    parts.push(title);
+    for (const item of items.slice(0, 5)) {
+      parts.push(...formatter(item));
+    }
+    parts.push('');
+  }
+
   async cancel(): Promise<void> {
     this.cancelled = true;
     // Stop all running sessions and await cleanup to prevent PTY process leaks
@@ -322,32 +365,23 @@ export class PlanOrchestrator {
 
     const parts: string[] = ['## Research Context\n'];
 
-    if (research.findings.externalResources.length > 0) {
-      parts.push('### External Resources');
-      for (const r of research.findings.externalResources.slice(0, 5)) {
-        parts.push(`- ${r.title}${r.url ? ` (${r.url})` : ''}`);
-        if (r.keyInsights.length > 0) {
-          parts.push(`  Key insights: ${r.keyInsights.slice(0, 3).join(', ')}`);
-        }
+    this._formatResearchSection(parts, '### External Resources', research.findings.externalResources, (item) => {
+      const r = item as ResearchResult['findings']['externalResources'][number];
+      const lines = [`- ${r.title}${r.url ? ` (${r.url})` : ''}`];
+      if (r.keyInsights.length > 0) {
+        lines.push(`  Key insights: ${r.keyInsights.slice(0, 3).join(', ')}`);
       }
-      parts.push('');
-    }
+      return lines;
+    });
 
-    if (research.findings.codebasePatterns.length > 0) {
-      parts.push('### Existing Codebase Patterns');
-      for (const p of research.findings.codebasePatterns.slice(0, 5)) {
-        parts.push(`- ${p.pattern} at ${p.location}`);
-      }
-      parts.push('');
-    }
+    this._formatResearchSection(parts, '### Existing Codebase Patterns', research.findings.codebasePatterns, (item) => {
+      const p = item as ResearchResult['findings']['codebasePatterns'][number];
+      return [`- ${p.pattern} at ${p.location}`];
+    });
 
-    if (research.findings.technicalRecommendations.length > 0) {
-      parts.push('### Recommendations');
-      for (const r of research.findings.technicalRecommendations.slice(0, 5)) {
-        parts.push(`- ${r}`);
-      }
-      parts.push('');
-    }
+    this._formatResearchSection(parts, '### Recommendations', research.findings.technicalRecommendations, (item) => [
+      `- ${item as string}`,
+    ]);
 
     return parts.join('\n');
   }
@@ -420,27 +454,14 @@ export class PlanOrchestrator {
       );
 
       // Extract JSON from response — try multiple strategies
-      let jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-      if (jsonMatch) {
-        jsonMatch = [jsonMatch[1]]; // Use captured group (inside code block)
-      } else {
-        jsonMatch = response.match(/\{[\s\S]*\}/);
-      }
+      const jsonStr = this._extractJsonFromResponse(response);
 
-      if (!jsonMatch) {
+      if (!jsonStr) {
         console.error(
           `[PlanOrchestrator] No JSON found in research response. Full response:`,
           response.substring(0, 2000)
         );
-        onSubagent?.({
-          type: 'failed',
-          agentId,
-          agentType: 'research',
-          model: this.researchModel,
-          status: 'failed',
-          error: 'No JSON found',
-          durationMs,
-        });
+        this._emitAgentFailure(onSubagent, agentId, 'research', this.researchModel, 'No JSON found', durationMs);
         return {
           success: false,
           findings: {
@@ -456,17 +477,9 @@ export class PlanOrchestrator {
         };
       }
 
-      const parsed = tryParseJSON(jsonMatch[0]);
+      const parsed = tryParseJSON(jsonStr);
       if (!parsed.success) {
-        onSubagent?.({
-          type: 'failed',
-          agentId,
-          agentType: 'research',
-          model: this.researchModel,
-          status: 'failed',
-          error: parsed.error,
-          durationMs,
-        });
+        this._emitAgentFailure(onSubagent, agentId, 'research', this.researchModel, parsed.error!, durationMs);
         return {
           success: false,
           findings: {
@@ -511,15 +524,7 @@ export class PlanOrchestrator {
     } catch (err) {
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
-      onSubagent?.({
-        type: 'failed',
-        agentId,
-        agentType: 'research',
-        model: this.researchModel,
-        status: 'failed',
-        error,
-        durationMs,
-      });
+      this._emitAgentFailure(onSubagent, agentId, 'research', this.researchModel, error, durationMs);
       return {
         success: false,
         findings: {
@@ -608,41 +613,20 @@ export class PlanOrchestrator {
       );
 
       // Extract JSON from response — try multiple strategies
-      let jsonMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-      if (jsonMatch) {
-        jsonMatch = [jsonMatch[1]]; // Use captured group (inside code block)
-      } else {
-        jsonMatch = response.match(/\{[\s\S]*\}/);
-      }
+      const jsonStr = this._extractJsonFromResponse(response);
 
-      if (!jsonMatch) {
+      if (!jsonStr) {
         console.error(
           `[PlanOrchestrator] No JSON found in planner response. Full response:`,
           response.substring(0, 2000)
         );
-        onSubagent?.({
-          type: 'failed',
-          agentId,
-          agentType: 'planner',
-          model: this.plannerModel,
-          status: 'failed',
-          error: 'No JSON found',
-          durationMs,
-        });
+        this._emitAgentFailure(onSubagent, agentId, 'planner', this.plannerModel, 'No JSON found', durationMs);
         return { success: false, error: 'No JSON in response' };
       }
 
-      const parsed = tryParseJSON(jsonMatch[0]);
+      const parsed = tryParseJSON(jsonStr);
       if (!parsed.success) {
-        onSubagent?.({
-          type: 'failed',
-          agentId,
-          agentType: 'planner',
-          model: this.plannerModel,
-          status: 'failed',
-          error: parsed.error,
-          durationMs,
-        });
+        this._emitAgentFailure(onSubagent, agentId, 'planner', this.plannerModel, parsed.error!, durationMs);
         return { success: false, error: parsed.error };
       }
 
@@ -668,15 +652,7 @@ export class PlanOrchestrator {
     } catch (err) {
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
-      onSubagent?.({
-        type: 'failed',
-        agentId,
-        agentType: 'planner',
-        model: this.plannerModel,
-        status: 'failed',
-        error,
-        durationMs,
-      });
+      this._emitAgentFailure(onSubagent, agentId, 'planner', this.plannerModel, error, durationMs);
       return { success: false, error };
     } finally {
       // Always clean up session and progress interval — centralizing here

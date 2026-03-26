@@ -499,27 +499,34 @@ export class OrchestratorLoop extends EventEmitter {
     }
   }
 
-  private handleTaskCompleted(queueTaskId: string): void {
+  private _finalizeTask(queueTaskId: string, status: 'completed' | 'failed', error?: string): OrchestratorTask | null {
     const orchTask = this.findOrchestratorTaskByQueueId(queueTaskId);
+    if (!orchTask) return null;
+
+    orchTask.status = status;
+    if (status === 'completed') {
+      orchTask.completedAt = Date.now();
+      this.stats.totalTasksCompleted++;
+    } else {
+      orchTask.error = error ?? null;
+      this.stats.totalTasksFailed++;
+    }
+    this.persist();
+    return orchTask;
+  }
+
+  private handleTaskCompleted(queueTaskId: string): void {
+    const orchTask = this._finalizeTask(queueTaskId, 'completed');
     if (!orchTask) return;
 
-    orchTask.status = 'completed';
-    orchTask.completedAt = Date.now();
-    this.stats.totalTasksCompleted++;
-    this.persist();
     this.emit('taskCompleted', orchTask);
-
     this.checkPhaseCompletion();
   }
 
   private handleTaskFailed(queueTaskId: string, error: string): void {
-    const orchTask = this.findOrchestratorTaskByQueueId(queueTaskId);
+    const orchTask = this._finalizeTask(queueTaskId, 'failed', error);
     if (!orchTask) return;
 
-    orchTask.status = 'failed';
-    orchTask.error = error;
-    this.stats.totalTasksFailed++;
-    this.persist();
     this.emit('taskFailed', orchTask, error);
 
     // Check if we should retry the task or fail the phase
@@ -553,19 +560,20 @@ export class OrchestratorLoop extends EventEmitter {
     }, this.config.phaseTimeoutMs);
   }
 
+  private _clearTimer(
+    timerKey: 'phasePollTimer' | 'phaseTimeoutTimer' | 'postPhaseTimer',
+    clearFn: typeof clearInterval | typeof clearTimeout
+  ): void {
+    if (this[timerKey]) {
+      clearFn(this[timerKey]);
+      this[timerKey] = null;
+    }
+  }
+
   private clearPhasePoll(): void {
-    if (this.phasePollTimer) {
-      clearInterval(this.phasePollTimer);
-      this.phasePollTimer = null;
-    }
-    if (this.phaseTimeoutTimer) {
-      clearTimeout(this.phaseTimeoutTimer);
-      this.phaseTimeoutTimer = null;
-    }
-    if (this.postPhaseTimer) {
-      clearTimeout(this.postPhaseTimer);
-      this.postPhaseTimer = null;
-    }
+    this._clearTimer('phasePollTimer', clearInterval);
+    this._clearTimer('phaseTimeoutTimer', clearTimeout);
+    this._clearTimer('postPhaseTimer', clearTimeout);
   }
 
   private pollPhaseStatus(phase: OrchestratorPhase): void {
