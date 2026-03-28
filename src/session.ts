@@ -542,8 +542,13 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Check if the Claude CLI process inside this session's tmux pane has active child processes.
-   * This detects running bash tools, test suites, builds, servers, etc. that Claude spawned.
+   * Check if the session's process tree has active child processes beyond Claude itself.
+   * Detects running bash tools, test suites, builds, servers, etc. that Claude spawned.
+   *
+   * The tmux pane PID is typically "claude" directly (bash exec'd into it). When Claude
+   * runs a bash tool, it spawns child processes: claude → bash → npm/node/python/etc.
+   * We check direct children of the pane PID, filtering out "claude" itself (for the rare
+   * case where bash wraps claude and didn't exec).
    *
    * Returns an array of {pid, command} for each child process, or empty array if none.
    * Returns empty array if no mux session or on error (fail-open to avoid blocking respawn).
@@ -552,62 +557,29 @@ export class Session extends EventEmitter {
     if (!this._muxSession) return [];
 
     try {
-      // Get direct children of the pane PID (typically just the claude process)
       const panePid = this._muxSession.pid;
-      const claudeChildren = execSync(`pgrep -P ${panePid}`, {
+
+      // Single call: get direct children with their command names
+      const output = execSync(`ps -o pid=,comm= --ppid ${panePid} 2>/dev/null`, {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
-      if (!claudeChildren) return [];
+      if (!output) return [];
 
-      const claudePids = claudeChildren
-        .split('\n')
-        .map((p) => parseInt(p, 10))
-        .filter((p) => !Number.isNaN(p));
-
-      // For each Claude process, check for its children (the actual running tools/processes)
       const activeProcesses: { pid: number; command: string }[] = [];
-      for (const claudePid of claudePids) {
-        try {
-          const toolChildren = execSync(`pgrep -P ${claudePid}`, {
-            encoding: 'utf-8',
-            timeout: EXEC_TIMEOUT_MS,
-          }).trim();
-          if (!toolChildren) continue;
-
-          const toolPids = toolChildren
-            .split('\n')
-            .map((p) => parseInt(p, 10))
-            .filter((p) => !Number.isNaN(p));
-
-          if (toolPids.length === 0) continue;
-
-          // Get command names for the child processes in a single ps call
-          try {
-            const psOutput = execSync(`ps -o pid=,comm= -p ${toolPids.join(',')} 2>/dev/null`, {
-              encoding: 'utf-8',
-              timeout: EXEC_TIMEOUT_MS,
-            }).trim();
-            for (const line of psOutput.split('\n')) {
-              const match = line.trim().match(/^(\d+)\s+(.+)/);
-              if (match) {
-                activeProcesses.push({ pid: parseInt(match[1], 10), command: match[2].trim() });
-              }
-            }
-          } catch {
-            // ps failed — just record PIDs without command names
-            for (const pid of toolPids) {
-              activeProcesses.push({ pid, command: 'unknown' });
-            }
-          }
-        } catch {
-          // No children for this Claude process
-        }
+      for (const line of output.split('\n')) {
+        const match = line.trim().match(/^(\d+)\s+(.+)/);
+        if (!match) continue;
+        const pid = parseInt(match[1], 10);
+        const command = match[2].trim();
+        // Skip the claude process itself (pane_pid may be bash wrapping claude)
+        if (command === 'claude') continue;
+        activeProcesses.push({ pid, command });
       }
 
       return activeProcesses;
     } catch {
-      // pgrep fails with exit code 1 when no matches — that's normal (no children)
+      // ps returns exit code 1 when no matches — normal (no children)
       return [];
     }
   }

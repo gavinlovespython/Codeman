@@ -2079,11 +2079,14 @@ export class RespawnController extends EventEmitter {
     }
 
     // Check for active child processes (bash tools, test suites, builds, etc.)
+    // These may produce no terminal output, so restart timers to retry periodically.
     const activeProcesses = this.session.getActiveChildProcesses();
     if (activeProcesses.length > 0) {
       const names = activeProcesses.map((p) => p.command).join(', ');
       this.log(`Skipping AI check - ${activeProcesses.length} active child process(es): ${names}`);
       this.logAction('detection', `Skipped AI check: child processes running (${names})`);
+      this.startNoOutputTimer();
+      this.startPreFilterTimer();
       return;
     }
 
