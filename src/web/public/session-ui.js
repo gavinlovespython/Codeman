@@ -941,7 +941,7 @@ Object.assign(CodemanApp.prototype, {
       const stored = localStorage.getItem('caseSettings_' + caseName);
       if (stored) return JSON.parse(stored);
     } catch { /* ignore */ }
-    return { agentTeams: false, opusContext1m: false };
+    return { agentTeams: false, opusContext1m: true };
   },
 
   saveCaseSettings(caseName, settings) {
