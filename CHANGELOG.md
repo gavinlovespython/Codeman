@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.5.7
+
+### Patch Changes
+
+- feat: support "Default (CLI default)" option for model selection. Adds a new empty-value option to the model dropdown that defers to the CLI's own default model instead of forcing a specific model. Ensures empty defaultModel values are treated as undefined when passed to session creation and Ralph loop start, preventing empty strings from being sent as model flags.
+
 ## 0.5.6
 
 ### Patch Changes
