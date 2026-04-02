@@ -4,7 +4,7 @@
  * Defines two exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: Esc, arrow up/down, Tab, Shift+Tab, /init, /clear, /compact, paste, and dismiss.
+ *   keyboard on mobile: Esc, arrow up/down, Tab, Shift+Tab, Ctrl+O, /init, /clear, /compact, paste, and dismiss.
  *   Destructive actions (/clear, /compact) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
@@ -71,6 +71,7 @@ const KeyboardAccessoryBar = {
       </button>
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn" data-action="shift-tab" title="Shift+Tab">⇧Tab</button>
+      <button class="accessory-btn" data-action="ctrl-o" title="Ctrl+O">⌃O</button>
       <button class="accessory-btn" data-action="opt-enter" title="Option+Enter (newline)">⌥Enter</button>
       <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
@@ -94,7 +95,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if ((action === 'scroll-up' || action === 'scroll-down' || action === 'arrow-left' || action === 'arrow-right' || action === 'tab' || action === 'shift-tab' || action === 'opt-enter' || action === 'esc') ||
+      if ((action === 'scroll-up' || action === 'scroll-down' || action === 'arrow-left' || action === 'arrow-right' || action === 'tab' || action === 'shift-tab' || action === 'ctrl-o' || action === 'opt-enter' || action === 'esc') ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
@@ -140,6 +141,9 @@ const KeyboardAccessoryBar = {
         break;
       case 'shift-tab':
         this.sendKey('\x1b[Z');
+        break;
+      case 'ctrl-o':
+        this.sendKey('\x0f');
         break;
       case 'init':
         this.sendCommand('/init');
