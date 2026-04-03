@@ -2105,8 +2105,9 @@ class CodemanApp {
 
     // Track working directory for path normalization in Project Insights
     this.currentSessionWorkingDir = session?.workingDir || null;
-    if (session && session.pid === null && session.status === 'idle') {
-      // This is a restored session - attach to the existing screen/shell
+    if (session && session.pid === null && !session._ended) {
+      // Session has no PTY attached — either restored after server restart
+      // or detached for some other reason. Re-attach regardless of status.
       try {
         const endpoint = session.mode === 'shell'
           ? `/api/sessions/${sessionId}/shell`
